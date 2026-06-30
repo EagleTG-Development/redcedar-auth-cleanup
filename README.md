@@ -7,7 +7,7 @@ Temporary break/fix script for Windows users whose Teams, OneDrive, or Office ap
 Open PowerShell and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1 | iex
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)" | iex
 ```
 
 The script gives a short cancellation window, closes Microsoft 365 apps, clears RedCedar-related and broad Microsoft 365 local auth state, and reboots the computer.
@@ -24,6 +24,10 @@ The script gives a short cancellation window, closes Microsoft 365 apps, clears 
 - Removes broad Microsoft 365 Credential Manager entries, including Office, Teams, OneDrive, AAD, MSOID, and ADAL targets.
 - Clears current-user AAD Broker token cache folders.
 - Forces a reboot.
+
+## Effect on other Microsoft 365 tenants
+
+This script may sign the current Windows user out of other Microsoft 365 tenants, including Source-Tenant sessions, because it removes broad Office/Teams/OneDrive/AAD/MSOID/ADAL credentials and clears the current-user AAD Broker token cache. It does not delete those cloud accounts; users may need to sign back into those apps after reboot.
 
 ## What it does not change
 
@@ -43,5 +47,5 @@ PowerShell does not provide a safe supported way to remove only one specific **S
 Remote execution with `irm ... | iex` should only be used with a trusted URL. To inspect first:
 
 ```powershell
-irm https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)"
 ```
