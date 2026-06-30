@@ -10,7 +10,7 @@ Open PowerShell and run:
 irm https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1 | iex
 ```
 
-The script gives a short cancellation window, closes Microsoft 365 apps, clears RedCedar-related local auth state, and reboots the computer.
+The script gives a short cancellation window, closes Microsoft 365 apps, clears RedCedar-related and broad Microsoft 365 local auth state, and reboots the computer.
 
 ## What it changes
 
@@ -21,6 +21,7 @@ The script gives a short cancellation window, closes Microsoft 365 apps, clears 
   - `redcedartgus.onmicrosoft.com`
   - `modocfsg.com`
   - `tumbijv.com`
+- Removes broad Microsoft 365 Credential Manager entries, including Office, Teams, OneDrive, AAD, MSOID, and ADAL targets.
 - Clears current-user AAD Broker token cache folders.
 - Forces a reboot.
 

@@ -3,9 +3,9 @@
 Clears RedCedar-related Microsoft 365 sign-in state and reboots Windows.
 
 .DESCRIPTION
-Stops Teams, OneDrive, and Office apps, removes RedCedar-related Windows
-Credential Manager entries, clears common Teams caches, clears current-user AAD
-Broker token cache folders, and forces a reboot.
+Stops Teams, OneDrive, and Office apps, removes RedCedar-related and broad
+Microsoft 365 Windows Credential Manager entries, clears common Teams caches,
+clears current-user AAD Broker token cache folders, and forces a reboot.
 
 This script is intended for temporary break/fix use when Teams, OneDrive, or
 Office are stuck on stale RedCedar/Eagle cross-tenant sign-in state.
@@ -149,15 +149,19 @@ function Get-CredentialManagerTargets {
     return @($targets | Sort-Object -Unique)
 }
 
-function Remove-RedCedarCredentials {
-    $patterns = @($tenantHints | ForEach-Object { "*$_*" })
+function Remove-CredentialTargetByPattern {
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string[]]$Pattern
+    )
+
     $targets = Get-CredentialManagerTargets | Where-Object {
         $target = $_
-        $patterns | Where-Object { $target -like $_ }
+        $Pattern | Where-Object { $target -like $_ }
     }
 
     if (@($targets).Count -eq 0) {
-        Write-Host 'No RedCedar-specific Credential Manager targets found.'
+        Write-Host "No $Label Credential Manager targets found."
         return
     }
 
@@ -170,6 +174,28 @@ function Remove-RedCedarCredentials {
             Write-Warning "Could not remove credential target: $target"
         }
     }
+}
+
+function Remove-RedCedarCredential {
+    $patterns = @($tenantHints | ForEach-Object { "*$_*" })
+    Remove-CredentialTargetByPattern -Label 'RedCedar-specific' -Pattern $patterns
+}
+
+function Remove-Microsoft365Credential {
+    Remove-CredentialTargetByPattern -Label 'Microsoft 365/Office/Teams/OneDrive' -Pattern @(
+        '*MicrosoftOffice*_Data:*',
+        '*MicrosoftOffice*_ADAL*',
+        '*OneDrive Cached Credential*',
+        '*SSO_POP_Device*',
+        '*ADAL*',
+        '*MSOID*',
+        '*AAD*',
+        '*Teams*',
+        '*MSTeams*',
+        '*msteams*',
+        '*MicrosoftTeams*',
+        '*SkypeSpaces*'
+    )
 }
 
 function Clear-AadBrokerTokenCache {
@@ -193,7 +219,10 @@ Write-Step 'Clearing Teams caches'
 Clear-TeamsCaches
 
 Write-Step 'Removing RedCedar-related Windows Credential Manager entries'
-Remove-RedCedarCredentials
+Remove-RedCedarCredential
+
+Write-Step 'Removing broad Office, Teams, OneDrive, and Microsoft 365 credentials'
+Remove-Microsoft365Credential
 
 Write-Step 'Clearing AAD Broker token cache'
 Clear-AadBrokerTokenCache
