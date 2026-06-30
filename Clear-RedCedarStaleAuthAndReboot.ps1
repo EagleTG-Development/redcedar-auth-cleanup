@@ -1,11 +1,16 @@
 <#
 .SYNOPSIS
-Clears RedCedar-related Microsoft 365 sign-in state and reboots Windows.
+Clears selected Microsoft 365 sign-in state and reboots Windows.
 
 .DESCRIPTION
-Stops Teams, OneDrive, and Office apps, removes RedCedar-related and broad
-Microsoft 365 Windows Credential Manager entries, clears common Teams caches,
-clears current-user AAD Broker token cache folders, and forces a reboot.
+Stops Teams, OneDrive, and Office apps, removes tenant-scoped Windows Credential
+Manager entries for EagleTG, RedCedarTG, or both, clears common Teams caches, and
+forces a reboot.
+
+Use -ClearAllLogins to also remove broad Office, Teams, OneDrive, AAD, MSOID, and
+ADAL credentials and clear the current-user AAD Broker token cache. That broader
+mode may sign the current Windows user out of other Microsoft 365 tenants,
+including Source-Tenant sessions.
 
 This script is intended for temporary break/fix use when Teams, OneDrive, or
 Office are stuck on stale RedCedar/Eagle cross-tenant sign-in state.
@@ -18,19 +23,51 @@ PowerShell does not provide a safe supported way to remove only one specific
 Settings > Accounts > Access work or school account by tenant/domain. If stale
 work/school accounts remain after reboot, remove them manually from Settings.
 
+.PARAMETER Tenant
+Tenant credential scope to clear. Valid values: RCTG, ETG, Both, ALL. Defaults to RCTG. ALL also enables broad Microsoft 365 login cleanup.
+
+.PARAMETER ClearAllLogins
+Also clears broad Microsoft 365 Credential Manager targets and AAD Broker token
+cache for the current Windows user. This can sign the user out of other tenants.
+
 .EXAMPLE
 irm https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1 | iex
+
+.EXAMPLE
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -Tenant ETG
+
+.EXAMPLE
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -Tenant ALL
 #>
+
+param(
+    [ValidateSet('RCTG', 'ETG', 'Both', 'ALL')]
+    [string]$Tenant = 'RCTG',
+
+    [switch]$ClearAllLogins
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$tenantHints = @(
-    'redcedartg.com',
-    'redcedartgus.onmicrosoft.com',
-    'modocfsg.com',
-    'tumbijv.com'
-)
+$tenantHintMap = @{
+    ETG = @(
+        '80240792-cbae-4f23-942c-b82db959df1b',
+        'EagleTG GCC',
+        'eagletg.com',
+        'eagletg.net',
+        'eagletgus.onmicrosoft.com',
+        'aquilarey.com'
+    )
+    RCTG = @(
+        'befedfad-14ec-423b-8dc8-3289d325c95b',
+        'Red Cedar TG-MTE LLC',
+        'redcedartg.com',
+        'redcedartgus.onmicrosoft.com',
+        'modocfsg.com',
+        'tumbijv.com'
+    )
+}
 
 function Write-Step {
     param([Parameter(Mandatory)][string]$Message)
@@ -43,7 +80,16 @@ function Get-ExistingPath {
     return @($Path | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
 }
 
-function Stop-M365Apps {
+function Get-SelectedTenantHint {
+    switch ($Tenant) {
+        'ETG' { return @($tenantHintMap.ETG) }
+        'RCTG' { return @($tenantHintMap.RCTG) }
+        'Both' { return @($tenantHintMap.ETG + $tenantHintMap.RCTG) }
+        'ALL' { return @($tenantHintMap.ETG + $tenantHintMap.RCTG) }
+    }
+}
+
+function Stop-M365App {
     $processNames = @(
         'Teams',
         'ms-teams',
@@ -107,7 +153,7 @@ function Remove-PathIfPresent {
     }
 }
 
-function Clear-TeamsCaches {
+function Clear-TeamsCache {
     $paths = @(
         Join-Path $env:APPDATA 'Microsoft\Teams\application cache\cache'
         Join-Path $env:APPDATA 'Microsoft\Teams\blob_storage'
@@ -134,7 +180,7 @@ function Clear-TeamsCaches {
     $paths | Sort-Object -Unique | ForEach-Object { Remove-PathIfPresent -Path $_ }
 }
 
-function Get-CredentialManagerTargets {
+function Get-CredentialManagerTarget {
     $cmdkeyOutput = & cmdkey.exe /list 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $cmdkeyOutput) {
         return @()
@@ -155,7 +201,7 @@ function Remove-CredentialTargetByPattern {
         [Parameter(Mandatory)][string[]]$Pattern
     )
 
-    $targets = Get-CredentialManagerTargets | Where-Object {
+    $targets = Get-CredentialManagerTarget | Where-Object {
         $target = $_
         $Pattern | Where-Object { $target -like $_ }
     }
@@ -176,9 +222,9 @@ function Remove-CredentialTargetByPattern {
     }
 }
 
-function Remove-RedCedarCredential {
-    $patterns = @($tenantHints | ForEach-Object { "*$_*" })
-    Remove-CredentialTargetByPattern -Label 'RedCedar-specific' -Pattern $patterns
+function Remove-TenantCredential {
+    $patterns = @(Get-SelectedTenantHint | ForEach-Object { "*$_*" })
+    Remove-CredentialTargetByPattern -Label "$Tenant tenant-scoped" -Pattern $patterns
 }
 
 function Remove-Microsoft365Credential {
@@ -208,27 +254,36 @@ function Clear-AadBrokerTokenCache {
 }
 
 Write-Warning 'This will close Teams, OneDrive, and Office apps.'
-Write-Warning 'It will clear Microsoft 365 sign-in cache and reboot this computer.'
+Write-Warning "It will clear $Tenant tenant-scoped Microsoft 365 sign-in hints and reboot this computer."
+if ($Tenant -eq 'ALL') {
+    $ClearAllLogins = $true
+}
+
+if ($ClearAllLogins) {
+    Write-Warning 'Broad login cleanup is enabled. This may sign the user out of other Microsoft 365 tenants.'
+}
 Write-Warning 'Save your work now. Press Ctrl+C within 20 seconds to cancel.'
 Start-Sleep -Seconds 20
 
 Write-Step 'Stopping Teams, OneDrive, and Office apps'
-Stop-M365Apps
+Stop-M365App
 
 Write-Step 'Clearing Teams caches'
-Clear-TeamsCaches
+Clear-TeamsCache
 
-Write-Step 'Removing RedCedar-related Windows Credential Manager entries'
-Remove-RedCedarCredential
+Write-Step "Removing $Tenant tenant-scoped Windows Credential Manager entries"
+Remove-TenantCredential
 
-Write-Step 'Removing broad Office, Teams, OneDrive, and Microsoft 365 credentials'
-Remove-Microsoft365Credential
+if ($ClearAllLogins) {
+    Write-Step 'Removing broad Office, Teams, OneDrive, and Microsoft 365 credentials'
+    Remove-Microsoft365Credential
 
-Write-Step 'Clearing AAD Broker token cache'
-Clear-AadBrokerTokenCache
+    Write-Step 'Clearing AAD Broker token cache'
+    Clear-AadBrokerTokenCache
+}
 
 Write-Host 'Cleanup complete. Rebooting in 30 seconds.' -ForegroundColor Yellow
-Write-Host 'After reboot, sign in with your normal RedCedar email address.' -ForegroundColor Yellow
+Write-Host 'After reboot, sign in with your normal work email address.' -ForegroundColor Yellow
 Start-Sleep -Seconds 30
 
 Restart-Computer -Force
