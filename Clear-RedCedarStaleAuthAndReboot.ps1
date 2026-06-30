@@ -1,0 +1,205 @@
+<#
+.SYNOPSIS
+Clears RedCedar-related Microsoft 365 sign-in state and reboots Windows.
+
+.DESCRIPTION
+Stops Teams, OneDrive, and Office apps, removes RedCedar-related Windows
+Credential Manager entries, clears common Teams caches, clears current-user AAD
+Broker token cache folders, and forces a reboot.
+
+This script is intended for temporary break/fix use when Teams, OneDrive, or
+Office are stuck on stale RedCedar/Eagle cross-tenant sign-in state.
+
+It does not delete Windows local accounts, Active Directory domain accounts,
+Windows user profiles, local files, domain join, Entra join, or Microsoft 365
+tenant configuration.
+
+PowerShell does not provide a safe supported way to remove only one specific
+Settings > Accounts > Access work or school account by tenant/domain. If stale
+work/school accounts remain after reboot, remove them manually from Settings.
+
+.EXAMPLE
+irm https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1 | iex
+#>
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$tenantHints = @(
+    'redcedartg.com',
+    'redcedartgus.onmicrosoft.com',
+    'modocfsg.com',
+    'tumbijv.com'
+)
+
+function Write-Step {
+    param([Parameter(Mandatory)][string]$Message)
+    Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function Get-ExistingPath {
+    param([Parameter(Mandatory)][string[]]$Path)
+
+    return @($Path | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+}
+
+function Stop-M365Apps {
+    $processNames = @(
+        'Teams',
+        'ms-teams',
+        'msteams',
+        'OneDrive',
+        'OUTLOOK',
+        'WINWORD',
+        'EXCEL',
+        'POWERPNT',
+        'ONENOTE',
+        'MSACCESS',
+        'MSPUB',
+        'VISIO',
+        'WINPROJ'
+    )
+
+    $oneDrivePaths = Get-ExistingPath -Path @(
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\OneDrive.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft OneDrive\OneDrive.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft OneDrive\OneDrive.exe')
+    )
+
+    foreach ($oneDrivePath in $oneDrivePaths) {
+        try {
+            Start-Process -FilePath $oneDrivePath -ArgumentList '/shutdown' -Wait -ErrorAction Stop
+            Write-Host "Requested OneDrive shutdown: $oneDrivePath"
+        }
+        catch {
+            Write-Warning "Could not request OneDrive shutdown from $oneDrivePath`: $($_.Exception.Message)"
+        }
+    }
+
+    $processes = Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $processNames -contains $_.ProcessName } |
+        Sort-Object ProcessName, Id
+
+    foreach ($process in $processes) {
+        try {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+            Write-Host "Stopped process $($process.ProcessName) [$($process.Id)]"
+        }
+        catch {
+            Write-Warning "Could not stop process $($process.ProcessName) [$($process.Id)]: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Remove-PathIfPresent {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    try {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        Write-Host "Removed $Path"
+    }
+    catch {
+        Write-Warning "Could not remove $Path`: $($_.Exception.Message)"
+    }
+}
+
+function Clear-TeamsCaches {
+    $paths = @(
+        Join-Path $env:APPDATA 'Microsoft\Teams\application cache\cache'
+        Join-Path $env:APPDATA 'Microsoft\Teams\blob_storage'
+        Join-Path $env:APPDATA 'Microsoft\Teams\Cache'
+        Join-Path $env:APPDATA 'Microsoft\Teams\databases'
+        Join-Path $env:APPDATA 'Microsoft\Teams\GPUCache'
+        Join-Path $env:APPDATA 'Microsoft\Teams\IndexedDB'
+        Join-Path $env:APPDATA 'Microsoft\Teams\Local Storage'
+        Join-Path $env:APPDATA 'Microsoft\Teams\tmp'
+        Join-Path $env:APPDATA 'Microsoft\Teams\Cookies'
+        Join-Path $env:APPDATA 'Microsoft\Teams\Cookies-journal'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\Cache'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\GPUCache'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\IndexedDB'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\Local Storage'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\Session Storage'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\tmp'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\Cookies'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\Cookies-journal'
+        Join-Path $env:LOCALAPPDATA 'Microsoft\TeamsMeetingAddin\Cache'
+        Join-Path $env:LOCALAPPDATA 'Microsoft\TeamsMeetingAddin\GPUCache'
+    )
+
+    $paths | Sort-Object -Unique | ForEach-Object { Remove-PathIfPresent -Path $_ }
+}
+
+function Get-CredentialManagerTargets {
+    $cmdkeyOutput = & cmdkey.exe /list 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $cmdkeyOutput) {
+        return @()
+    }
+
+    $targets = foreach ($line in $cmdkeyOutput) {
+        if ($line -match '^\s*Target:\s*(.+?)\s*$') {
+            $Matches[1]
+        }
+    }
+
+    return @($targets | Sort-Object -Unique)
+}
+
+function Remove-RedCedarCredentials {
+    $patterns = @($tenantHints | ForEach-Object { "*$_*" })
+    $targets = Get-CredentialManagerTargets | Where-Object {
+        $target = $_
+        $patterns | Where-Object { $target -like $_ }
+    }
+
+    if (@($targets).Count -eq 0) {
+        Write-Host 'No RedCedar-specific Credential Manager targets found.'
+        return
+    }
+
+    foreach ($target in $targets) {
+        & cmdkey.exe "/delete:$target" | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Removed credential target: $target"
+        }
+        else {
+            Write-Warning "Could not remove credential target: $target"
+        }
+    }
+}
+
+function Clear-AadBrokerTokenCache {
+    $paths = @(
+        Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker\Accounts'
+        Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker\Cache'
+    )
+
+    $paths | ForEach-Object { Remove-PathIfPresent -Path $_ }
+}
+
+Write-Warning 'This will close Teams, OneDrive, and Office apps.'
+Write-Warning 'It will clear Microsoft 365 sign-in cache and reboot this computer.'
+Write-Warning 'Save your work now. Press Ctrl+C within 20 seconds to cancel.'
+Start-Sleep -Seconds 20
+
+Write-Step 'Stopping Teams, OneDrive, and Office apps'
+Stop-M365Apps
+
+Write-Step 'Clearing Teams caches'
+Clear-TeamsCaches
+
+Write-Step 'Removing RedCedar-related Windows Credential Manager entries'
+Remove-RedCedarCredentials
+
+Write-Step 'Clearing AAD Broker token cache'
+Clear-AadBrokerTokenCache
+
+Write-Host 'Cleanup complete. Rebooting in 30 seconds.' -ForegroundColor Yellow
+Write-Host 'After reboot, sign in with your normal RedCedar email address.' -ForegroundColor Yellow
+Start-Sleep -Seconds 30
+
+Restart-Computer -Force
