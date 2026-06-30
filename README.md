@@ -34,7 +34,7 @@ Use this only if the commands above do not fix the problem:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-RedCedarStaleAuthAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -Tenant ALL
 ```
 
-`-Tenant ALL` may sign you out of other Microsoft 365 tenants or organizations on this Windows profile. You may need to sign back in after reboot.
+`-Tenant ALL` may sign you out of other Microsoft 365 tenants or organizations on this Windows profile. It also clears the New Teams account picker cache. You may need to sign back in after reboot.
 
 ## Before you run it
 
@@ -62,7 +62,12 @@ Tenant matching uses these known IDs/domains:
 `-Tenant ALL` also:
 
 - Removes broader Microsoft 365 credentials for Office, Teams, OneDrive, AAD, MSOID, and ADAL.
-- Clears the current-user AAD Broker token cache.
+- Clears Microsoft identity/account-picker caches:
+  - `%LocalAppData%\Packages\MSTeams_8wekyb3d8bbwe`
+  - `%LocalAppData%\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy`
+  - `%LocalAppData%\Microsoft\OneAuth`
+  - `%LocalAppData%\Microsoft\TokenBroker`
+  - `%LocalAppData%\Microsoft\IdentityCache`
 
 ## What this script does not change
 

@@ -8,9 +8,9 @@ Manager entries for EagleTG, RedCedarTG, or both, clears common Teams caches, an
 forces a reboot.
 
 Use -ClearAllLogins to also remove broad Office, Teams, OneDrive, AAD, MSOID, and
-ADAL credentials and clear the current-user AAD Broker token cache. That broader
-mode may sign the current Windows user out of other Microsoft 365 tenants,
-including Source-Tenant sessions.
+ADAL credentials and clear Microsoft identity caches such as AAD Broker, OneAuth,
+TokenBroker, and IdentityCache. That broader mode may sign the current Windows
+user out of other Microsoft 365 tenants, including Source-Tenant sessions.
 
 This script is intended for temporary break/fix use when Teams, OneDrive, or
 Office are stuck on stale RedCedar/Eagle cross-tenant sign-in state.
@@ -244,10 +244,13 @@ function Remove-Microsoft365Credential {
     )
 }
 
-function Clear-AadBrokerTokenCache {
+function Clear-MicrosoftIdentityCache {
     $paths = @(
-        Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker\Accounts'
-        Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker\Cache'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe'
+        Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy'
+        Join-Path $env:LOCALAPPDATA 'Microsoft\OneAuth'
+        Join-Path $env:LOCALAPPDATA 'Microsoft\TokenBroker'
+        Join-Path $env:LOCALAPPDATA 'Microsoft\IdentityCache'
     )
 
     $paths | ForEach-Object { Remove-PathIfPresent -Path $_ }
@@ -278,8 +281,8 @@ if ($ClearAllLogins) {
     Write-Step 'Removing broad Office, Teams, OneDrive, and Microsoft 365 credentials'
     Remove-Microsoft365Credential
 
-    Write-Step 'Clearing AAD Broker token cache'
-    Clear-AadBrokerTokenCache
+    Write-Step 'Clearing Microsoft identity and account picker caches'
+    Clear-MicrosoftIdentityCache
 }
 
 Write-Host 'Cleanup complete. Rebooting in 30 seconds.' -ForegroundColor Yellow
