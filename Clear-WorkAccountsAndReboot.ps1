@@ -80,10 +80,102 @@ function Write-Step {
     Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
+function Start-CleanupTranscript {
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $path = Join-Path $env:TEMP "Clear-WorkAccountsAndReboot-$timestamp.log"
+
+    try {
+        Start-Transcript -Path $path -Force | Out-Null
+        Write-Host "Transcript log: $path" -ForegroundColor Cyan
+        return $path
+    }
+    catch {
+        Write-Warning "Could not start transcript logging: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Stop-CleanupTranscript {
+    param([string]$Path)
+
+    if (-not $Path) {
+        return
+    }
+
+    try {
+        Stop-Transcript | Out-Null
+        Write-Host "Transcript saved: $Path" -ForegroundColor Cyan
+    }
+    catch {
+        Write-Warning "Could not stop transcript logging: $($_.Exception.Message)"
+    }
+}
+
+function Test-IsElevated {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Show-ExecutionContextSummary {
+    Write-Host 'Execution context:' -ForegroundColor Cyan
+    Write-Host "  User: $env:USERDOMAIN\$env:USERNAME"
+    Write-Host "  Profile: $env:USERPROFILE"
+    Write-Host "  Elevated: $(if (Test-IsElevated) { 'Yes' } else { 'No' })"
+
+    if (-not (Test-IsElevated)) {
+        Write-Warning 'Not running elevated. User-level cleanup will continue, but some machine-wide Office values may be skipped.'
+    }
+}
+
 function Get-ExistingPath {
     param([Parameter(Mandatory)][string[]]$Path)
 
     return @($Path | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+}
+
+function Invoke-ProcessWithTimeout {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [Parameter(Mandatory)][int]$TimeoutSeconds,
+        [Parameter(Mandatory)][string]$Description,
+        [switch]$KillOnTimeout,
+        [switch]$NoNewWindow
+    )
+
+    $startArgs = @{
+        FilePath = $FilePath
+        PassThru = $true
+        ErrorAction = 'Stop'
+    }
+
+    if ($ArgumentList.Count -gt 0) {
+        $startArgs.ArgumentList = $ArgumentList
+    }
+
+    if ($NoNewWindow) {
+        $startArgs.NoNewWindow = $true
+    }
+
+    $process = Start-Process @startArgs
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        Write-Warning "$Description did not exit within $TimeoutSeconds seconds. This is not fatal; continuing cleanup."
+        if ($KillOnTimeout) {
+            Write-Warning "Stopping $Description process so the script can continue. The reboot will complete remaining cleanup."
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+
+        return [pscustomobject]@{
+            TimedOut = $true
+            ExitCode = $null
+        }
+    }
+
+    return [pscustomobject]@{
+        TimedOut = $false
+        ExitCode = $process.ExitCode
+    }
 }
 
 function Get-SelectedTenantHint {
@@ -121,7 +213,12 @@ function Stop-M365App {
 
     foreach ($oneDrivePath in $oneDrivePaths) {
         try {
-            Start-Process -FilePath $oneDrivePath -ArgumentList '/shutdown' -Wait -ErrorAction Stop
+            Invoke-ProcessWithTimeout `
+                -FilePath $oneDrivePath `
+                -ArgumentList '/shutdown' `
+                -TimeoutSeconds 30 `
+                -Description 'OneDrive shutdown request' `
+                -KillOnTimeout | Out-Null
             Write-Host "Requested OneDrive shutdown: $oneDrivePath"
         }
         catch {
@@ -130,7 +227,10 @@ function Stop-M365App {
     }
 
     $processes = Get-Process -ErrorAction SilentlyContinue |
-        Where-Object { $processNames -contains $_.ProcessName } |
+        Where-Object {
+            $processNames -contains $_.ProcessName -or
+            ($_.Path -and $_.Path -match '\\Microsoft\\Teams|\\MSTeams_8wekyb3d8bbwe\\|\\TeamsMeetingAddin\\')
+        } |
         Sort-Object ProcessName, Id
 
     foreach ($process in $processes) {
@@ -405,7 +505,10 @@ function Clear-OfficeLicenseCache {
 }
 
 function Wait-WinRtAction {
-    param([Parameter(Mandatory)]$WinRtAction)
+    param(
+        [Parameter(Mandatory)]$WinRtAction,
+        [int]$TimeoutSeconds = 60
+    )
 
     $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() |
         Where-Object {
@@ -416,13 +519,16 @@ function Wait-WinRtAction {
         Select-Object -First 1
 
     $task = $asTask.Invoke($null, @($WinRtAction))
-    $task.Wait(-1) | Out-Null
+    if (-not $task.Wait($TimeoutSeconds * 1000)) {
+        throw "Windows Runtime action did not complete within $TimeoutSeconds seconds."
+    }
 }
 
 function Wait-WinRtOperation {
     param(
         [Parameter(Mandatory)]$WinRtOperation,
-        [Parameter(Mandatory)][Type]$ResultType
+        [Parameter(Mandatory)][Type]$ResultType,
+        [int]$TimeoutSeconds = 60
     )
 
     $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() |
@@ -435,7 +541,10 @@ function Wait-WinRtOperation {
 
     $genericTask = $asTask.MakeGenericMethod($ResultType)
     $task = $genericTask.Invoke($null, @($WinRtOperation))
-    $task.Wait(-1) | Out-Null
+    if (-not $task.Wait($TimeoutSeconds * 1000)) {
+        throw "Windows Runtime operation did not complete within $TimeoutSeconds seconds."
+    }
+
     return $task.Result
 }
 
@@ -509,7 +618,12 @@ function Invoke-OneDriveReset {
     }
 
     try {
-        Start-Process -FilePath $oneDrivePath -ArgumentList '/reset' -Wait -ErrorAction Stop
+        Invoke-ProcessWithTimeout `
+            -FilePath $oneDrivePath `
+            -ArgumentList '/reset' `
+            -TimeoutSeconds 60 `
+            -Description 'OneDrive reset request' `
+            -KillOnTimeout | Out-Null
         Write-Host "Requested OneDrive reset: $oneDrivePath"
     }
     catch {
@@ -574,15 +688,15 @@ function Install-CompanyPortal {
     )
 
     try {
-        $process = Start-Process `
+        $process = Invoke-ProcessWithTimeout `
             -FilePath $winget.Source `
             -ArgumentList $arguments `
-            -Wait `
-            -PassThru `
-            -NoNewWindow `
-            -ErrorAction Stop
+            -TimeoutSeconds 300 `
+            -Description 'Microsoft Company Portal winget install' `
+            -KillOnTimeout `
+            -NoNewWindow
 
-        if ($process.ExitCode -eq 0) {
+        if (-not $process.TimedOut -and $process.ExitCode -eq 0) {
             Write-Host 'Microsoft Company Portal is installed or already available.'
             return
         }
@@ -647,6 +761,9 @@ function Show-DsRegStatusSummary {
     }
 }
 
+$transcriptPath = Start-CleanupTranscript
+Show-ExecutionContextSummary
+
 Write-Warning 'This will close Teams, OneDrive, and Office apps.'
 Write-Warning "It will clear $Tenant tenant-scoped Microsoft 365 sign-in hints and reboot this computer."
 if ($Tenant -eq 'ALL') {
@@ -696,6 +813,7 @@ Install-CompanyPortal
 Write-Host 'Cleanup complete. Rebooting in 30 seconds.' -ForegroundColor Yellow
 Write-Host 'After reboot, sign in with your normal work email address.' -ForegroundColor Yellow
 Write-Host 'Open Company Portal, select the device, and sync or check status.' -ForegroundColor Yellow
+Stop-CleanupTranscript -Path $transcriptPath
 Start-Sleep -Seconds 30
 
 Restart-Computer -Force
