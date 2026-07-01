@@ -42,11 +42,18 @@ This script is stronger. It closes Microsoft 365 apps, clears selected sign-in s
 
 ### Recommended command
 
+Download the script, review it if needed, then run it:
+
 ```powershell
-irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-TeamsCache.ps1?$(Get-Date -Format yyyyMMddHHmmss)" | iex
+$Script = "$env:TEMP\Clear-TeamsCache.ps1"
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-TeamsCache.ps1?$(Get-Date -Format yyyyMMddHHmmss)" -OutFile $Script
+Get-Content $Script
+& $Script
 ```
 
-This command:
+This avoids piping downloaded code directly into PowerShell.
+
+The script:
 
 1. Stops Teams.
 2. Clears New Teams and Classic Teams cache folders.
@@ -57,7 +64,9 @@ After Teams opens, start a **new** chat and type the full email address. Do not 
 ### If Teams still shows stale account choices
 
 ```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-TeamsCache.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -IncludeIdentityCache
+$Script = "$env:TEMP\Clear-TeamsCache.ps1"
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-TeamsCache.ps1?$(Get-Date -Format yyyyMMddHHmmss)" -OutFile $Script
+& $Script -IncludeIdentityCache
 ```
 
 `-IncludeIdentityCache` also clears local Microsoft account-picker/token broker cache folders. This can sign Teams or other Microsoft apps out for the current Windows user.
@@ -65,7 +74,9 @@ After Teams opens, start a **new** chat and type the full email address. Do not 
 ### Clear Teams cache without reopening Teams
 
 ```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-TeamsCache.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -NoLaunch
+$Script = "$env:TEMP\Clear-TeamsCache.ps1"
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-TeamsCache.ps1?$(Get-Date -Format yyyyMMddHHmmss)" -OutFile $Script
+& $Script -NoLaunch
 ```
 
 ## Option 2: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot

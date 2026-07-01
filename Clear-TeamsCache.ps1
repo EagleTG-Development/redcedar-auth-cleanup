@@ -41,140 +41,301 @@ param(
     [switch]$NoLaunch
 )
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
+function Invoke-TeamsCacheCleanup {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [switch]$IncludeIdentityCache,
 
-function Write-Step {
-    param([Parameter(Mandatory)][string]$Message)
-    Write-Host "==> $Message" -ForegroundColor Cyan
-}
-
-function Stop-TeamsProcess {
-    $processNames = @(
-        'Teams',
-        'ms-teams',
-        'msteams'
+        [switch]$NoLaunch
     )
 
-    Write-Step 'Stopping Teams processes'
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    $cleanupState = @{
+        RemovalWarnings = 0
+    }
 
-    foreach ($processName in $processNames) {
-        $processes = @(Get-Process -Name $processName -ErrorAction SilentlyContinue)
-        foreach ($process in $processes) {
-            $target = "$($process.ProcessName) pid $($process.Id)"
-            if ($PSCmdlet.ShouldProcess($target, 'Stop process')) {
-                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    function Write-Step {
+        param([Parameter(Mandatory)][string]$Message)
+        Write-Host "==> $Message" -ForegroundColor Cyan
+    }
+
+    function Assert-WindowsProfilePath {
+        param(
+            [Parameter(Mandatory)][string]$Name,
+            [Parameter(Mandatory)][string]$Path
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            throw "$Name is not set. This script must run in a Windows user profile."
+        }
+
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            throw "$Name does not exist: $Path"
+        }
+    }
+
+    function Assert-SupportedEnvironment {
+        if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+            throw 'This script only supports Windows.'
+        }
+
+        Assert-WindowsProfilePath -Name 'LOCALAPPDATA' -Path $env:LOCALAPPDATA
+        Assert-WindowsProfilePath -Name 'APPDATA' -Path $env:APPDATA
+    }
+
+    function Get-NormalizedPath {
+        param([Parameter(Mandatory)][string]$Path)
+
+        return [System.IO.Path]::GetFullPath($Path).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    }
+
+    function Test-PathWithinRoot {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$Root
+        )
+
+        $normalizedPath = Get-NormalizedPath -Path $Path
+        $normalizedRoot = Get-NormalizedPath -Path $Root
+        $rootPrefix = "$normalizedRoot$([System.IO.Path]::DirectorySeparatorChar)"
+
+        return $normalizedPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    }
+
+    function Assert-SafeCleanupPath {
+        param([Parameter(Mandatory)][string]$Path)
+
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            throw 'Refusing to clean an empty path.'
+        }
+
+        $normalizedPath = Get-NormalizedPath -Path $Path
+        $allowedRoots = @(
+            $env:LOCALAPPDATA,
+            $env:APPDATA
+        )
+
+        foreach ($root in $allowedRoots) {
+            if (Test-PathWithinRoot -Path $normalizedPath -Root $root) {
+                return
+            }
+        }
+
+        throw "Refusing to clean path outside the current user's app data folders: $Path"
+    }
+
+    function Stop-TeamsProcess {
+        $processNames = @(
+            'Teams',
+            'ms-teams',
+            'msteams'
+        )
+
+        Write-Step 'Stopping Teams processes'
+
+        foreach ($processName in $processNames) {
+            $processes = @(Get-Process -Name $processName -ErrorAction SilentlyContinue)
+            foreach ($process in $processes) {
+                $target = "$($process.ProcessName) pid $($process.Id)"
+                if ($PSCmdlet.ShouldProcess($target, 'Stop process')) {
+                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                }
             }
         }
     }
-}
 
-function Remove-PathContents {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Description
-    )
+    function Remove-PathContents {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$Description
+        )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
-        Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
-        return
-    }
+        Assert-SafeCleanupPath -Path $Path
 
-    if ($PSCmdlet.ShouldProcess($Path, "Clear $Description")) {
-        Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue |
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Remove-PathTree {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Description
-    )
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
-        return
-    }
-
-    if ($PSCmdlet.ShouldProcess($Path, "Remove $Description")) {
-        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Start-TeamsApp {
-    Write-Step 'Launching Teams'
-
-    $launchTargets = @(
-        @{ Kind = 'Uri'; Value = 'shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams'; Description = 'New Teams app package' },
-        @{ Kind = 'File'; Value = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\ms-teams.exe'; Description = 'New Teams WindowsApps executable' },
-        @{ Kind = 'File'; Value = Join-Path $env:LOCALAPPDATA 'Microsoft\Teams\current\Teams.exe'; Description = 'Classic Teams executable' },
-        @{ Kind = 'Uri'; Value = 'msteams:'; Description = 'Teams protocol handler' }
-    )
-
-    foreach ($launchTarget in $launchTargets) {
-        if ($launchTarget.Kind -eq 'File' -and -not (Test-Path -LiteralPath $launchTarget.Value)) {
-            continue
-        }
-
-        try {
-            if ($PSCmdlet.ShouldProcess($launchTarget.Description, 'Start Teams')) {
-                Start-Process -FilePath $launchTarget.Value -ErrorAction Stop
-            }
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
             return
-        } catch {
-            Write-Host "Launch failed for $($launchTarget.Description): $($_.Exception.Message)" -ForegroundColor DarkGray
+        }
+
+        if ($PSCmdlet.ShouldProcess($Path, "Clear $Description")) {
+            try {
+                $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)
+            } catch {
+                $cleanupState.RemovalWarnings++
+                Write-Warning "Could not list ${Path}: $($_.Exception.Message)"
+                return
+            }
+
+            foreach ($child in $children) {
+                try {
+                    Remove-Item -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop
+                } catch {
+                    $cleanupState.RemovalWarnings++
+                    Write-Warning "Could not remove $($child.FullName): $($_.Exception.Message)"
+                }
+            }
         }
     }
 
-    Write-Warning 'Teams cache was cleared, but Teams could not be relaunched automatically. Start Teams manually.'
-}
+    function Remove-PathTree {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$Description
+        )
 
-Stop-TeamsProcess
-Start-Sleep -Seconds 2
+        Assert-SafeCleanupPath -Path $Path
 
-Write-Step 'Clearing Teams cache folders'
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
+            return
+        }
 
-$newTeamsCachePaths = @(
-    @{ Path = Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams'; Description = 'New Teams MSTeams cache' },
-    @{ Path = Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\TempState'; Description = 'New Teams temp state' }
-)
+        if ($PSCmdlet.ShouldProcess($Path, "Remove $Description")) {
+            try {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            } catch {
+                $cleanupState.RemovalWarnings++
+                Write-Warning "Could not remove ${Path}: $($_.Exception.Message)"
+            }
+        }
+    }
 
-$classicTeamsCachePaths = @(
-    @{ Path = Join-Path $env:APPDATA 'Microsoft\Teams\Cache'; Description = 'Classic Teams cache' },
-    @{ Path = Join-Path $env:APPDATA 'Microsoft\Teams\Code Cache'; Description = 'Classic Teams code cache' },
-    @{ Path = Join-Path $env:APPDATA 'Microsoft\Teams\GPUCache'; Description = 'Classic Teams GPU cache' },
-    @{ Path = Join-Path $env:APPDATA 'Microsoft\Teams\IndexedDB'; Description = 'Classic Teams IndexedDB' },
-    @{ Path = Join-Path $env:APPDATA 'Microsoft\Teams\Local Storage'; Description = 'Classic Teams local storage' },
-    @{ Path = Join-Path $env:APPDATA 'Microsoft\Teams\tmp'; Description = 'Classic Teams temp cache' }
-)
+    function Start-TeamsApp {
+        Write-Step 'Launching Teams'
 
-foreach ($cachePath in @($newTeamsCachePaths + $classicTeamsCachePaths)) {
-    Remove-PathContents -Path $cachePath.Path -Description $cachePath.Description
-}
+        $launchTargets = @(
+            @{
+                Kind = 'Uri'
+                Value = 'shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams'
+                Description = 'New Teams app package'
+            }
+            @{
+                Kind = 'File'
+                Value = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\ms-teams.exe'
+                Description = 'New Teams WindowsApps executable'
+            }
+            @{
+                Kind = 'File'
+                Value = Join-Path $env:LOCALAPPDATA 'Microsoft\Teams\current\Teams.exe'
+                Description = 'Classic Teams executable'
+            }
+            @{
+                Kind = 'Uri'
+                Value = 'msteams:'
+                Description = 'Teams protocol handler'
+            }
+        )
 
-if ($IncludeIdentityCache) {
-    Write-Step 'Clearing Teams-adjacent identity cache folders'
+        foreach ($launchTarget in $launchTargets) {
+            if ($launchTarget.Kind -eq 'File' -and -not (Test-Path -LiteralPath $launchTarget.Value)) {
+                continue
+            }
 
-    $identityCachePaths = @(
-        @{ Path = Join-Path $env:LOCALAPPDATA 'Microsoft\OneAuth'; Description = 'OneAuth cache' },
-        @{ Path = Join-Path $env:LOCALAPPDATA 'Microsoft\TokenBroker'; Description = 'TokenBroker cache' },
-        @{ Path = Join-Path $env:LOCALAPPDATA 'Microsoft\IdentityCache'; Description = 'Microsoft IdentityCache' }
+            try {
+                if ($PSCmdlet.ShouldProcess($launchTarget.Description, 'Start Teams')) {
+                    Start-Process -FilePath $launchTarget.Value -ErrorAction Stop
+                }
+                return
+            } catch {
+                $message = "Launch failed for $($launchTarget.Description): $($_.Exception.Message)"
+                Write-Host $message -ForegroundColor DarkGray
+            }
+        }
+
+        Write-Warning 'Teams cache was cleared, but Teams could not be relaunched automatically. Start Teams manually.'
+    }
+
+    Assert-SupportedEnvironment
+    Stop-TeamsProcess
+    Start-Sleep -Seconds 2
+
+    Write-Step 'Clearing Teams cache folders'
+
+    $newTeamsCachePaths = @(
+        @{
+            Path = Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams'
+            Description = 'New Teams MSTeams cache'
+        }
+        @{
+            Path = Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\TempState'
+            Description = 'New Teams temp state'
+        }
     )
 
-    foreach ($identityPath in $identityCachePaths) {
-        Remove-PathTree -Path $identityPath.Path -Description $identityPath.Description
+    $classicTeamsCachePaths = @(
+        @{
+            Path = Join-Path $env:APPDATA 'Microsoft\Teams\Cache'
+            Description = 'Classic Teams cache'
+        }
+        @{
+            Path = Join-Path $env:APPDATA 'Microsoft\Teams\Code Cache'
+            Description = 'Classic Teams code cache'
+        }
+        @{
+            Path = Join-Path $env:APPDATA 'Microsoft\Teams\GPUCache'
+            Description = 'Classic Teams GPU cache'
+        }
+        @{
+            Path = Join-Path $env:APPDATA 'Microsoft\Teams\IndexedDB'
+            Description = 'Classic Teams IndexedDB'
+        }
+        @{
+            Path = Join-Path $env:APPDATA 'Microsoft\Teams\Local Storage'
+            Description = 'Classic Teams local storage'
+        }
+        @{
+            Path = Join-Path $env:APPDATA 'Microsoft\Teams\tmp'
+            Description = 'Classic Teams temp cache'
+        }
+    )
+
+    foreach ($cachePath in @($newTeamsCachePaths + $classicTeamsCachePaths)) {
+        Remove-PathContents -Path $cachePath.Path -Description $cachePath.Description
+    }
+
+    if ($IncludeIdentityCache) {
+        Write-Warning 'This also clears Microsoft identity caches and may sign out Teams or other Microsoft apps.'
+        Write-Step 'Clearing Teams-adjacent identity cache folders'
+
+        $identityCachePaths = @(
+            @{
+                Path = Join-Path $env:LOCALAPPDATA 'Microsoft\OneAuth'
+                Description = 'OneAuth cache'
+            }
+            @{
+                Path = Join-Path $env:LOCALAPPDATA 'Microsoft\TokenBroker'
+                Description = 'TokenBroker cache'
+            }
+            @{
+                Path = Join-Path $env:LOCALAPPDATA 'Microsoft\IdentityCache'
+                Description = 'Microsoft IdentityCache'
+            }
+        )
+
+        foreach ($identityPath in $identityCachePaths) {
+            Remove-PathTree -Path $identityPath.Path -Description $identityPath.Description
+        }
+    }
+
+    if (-not $NoLaunch) {
+        Start-TeamsApp
+    }
+
+    Write-Host ''
+    if ($cleanupState.RemovalWarnings -gt 0) {
+        $message = "Teams cache cleanup finished with $($cleanupState.RemovalWarnings) removal warning(s). " +
+            'Close Teams and rerun if stale data remains.'
+        Write-Warning $message
+    } else {
+        Write-Host 'Teams cache cleanup complete.' -ForegroundColor Green
+    }
+
+    if ($NoLaunch) {
+        Write-Host 'Reopen Teams and start a new chat by typing the full email address.' -ForegroundColor Green
+    } else {
+        Write-Host 'Start a new chat by typing the full email address.' -ForegroundColor Green
     }
 }
 
-if (-not $NoLaunch) {
-    Start-TeamsApp
-}
-
-Write-Host ''
-Write-Host 'Teams cache cleanup complete.' -ForegroundColor Green
-if ($NoLaunch) {
-    Write-Host 'Reopen Teams and start a new chat by typing the full email address.' -ForegroundColor Green
-} else {
-    Write-Host 'Start a new chat by typing the full email address.' -ForegroundColor Green
-}
+Invoke-TeamsCacheCleanup @PSBoundParameters
