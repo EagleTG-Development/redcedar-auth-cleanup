@@ -8,12 +8,13 @@ Manager entries for EagleTG, RedCedarTG, or both, clears common Teams caches,
 ensures Microsoft Company Portal is installed when winget is available, and
 forces a reboot.
 
-Use -ClearAllLogins to also remove broad Office, Teams, OneDrive, AAD, MSOID, and
-ADAL credentials; clear Microsoft identity caches such as AAD Broker, OneAuth,
-TokenBroker, and IdentityCache; reset Office identity/licensing state; sign out
-Office WAM accounts; and remove OneDrive work/school account state. That broader
-mode may sign the current Windows user out of other Microsoft 365 tenants,
-including Source-Tenant sessions.
+Use -ClearAllLogins to also remove broad Office, Teams, OneDrive, AAD, MSOID,
+ADAL, and Microsoft Online sign-in credentials; clear New Outlook app/account
+state; back up and remove classic Outlook profiles; clear Microsoft identity
+caches such as AAD Broker, OneAuth, TokenBroker, and IdentityCache; reset Office
+identity/licensing state; sign out Office WAM accounts; and back up/remove
+OneDrive work/school account state. That broader mode may sign the current
+Windows user out of other Microsoft 365 tenants, including Source-Tenant sessions.
 
 This script is intended for temporary break/fix use when Teams, OneDrive, or
 Office are stuck on stale RedCedar/Eagle cross-tenant sign-in state.
@@ -32,9 +33,10 @@ have IT rejoin/repair the device.
 Tenant credential scope to clear. Valid values: RCTG, ETG, Both, ALL. Defaults to RCTG. ALL also enables broad Microsoft 365 login cleanup.
 
 .PARAMETER ClearAllLogins
-Also clears broad Microsoft 365 credentials, Office identity/licensing state,
-WAM Office accounts, OneDrive work/school account state, and Microsoft identity
-caches for the current Windows user. This can sign the user out of other tenants.
+Also clears broad Microsoft 365 credentials, New Outlook app/account state,
+classic Outlook profiles, Office identity/licensing state, WAM Office accounts,
+OneDrive work/school account state, and Microsoft identity caches for the current
+Windows user. This can sign the user out of other tenants.
 
 .EXAMPLE
 irm https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-WorkAccountsAndReboot.ps1 | iex
@@ -195,6 +197,7 @@ function Stop-M365App {
         'OneDrive',
         'OUTLOOK',
         'olk',
+        'OutlookForWindows',
         'WINWORD',
         'EXCEL',
         'POWERPNT',
@@ -285,6 +288,113 @@ function Remove-RegistryPathIfPresent {
     }
 }
 
+function Remove-RegistryValueIfPresent {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $property = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+    if (-not $property) {
+        return
+    }
+
+    try {
+        Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction Stop
+        Write-Host "Removed registry value: $Path\$Name"
+    }
+    catch {
+        Write-Warning "Could not remove registry value $Path\$Name`: $($_.Exception.Message)"
+    }
+}
+
+function New-DatedBackupFolder {
+    param([Parameter(Mandatory)][string]$Root)
+
+    $backupPath = Join-Path $Root (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
+    New-Item -Path $backupPath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    Write-Host "Backup folder: $backupPath"
+    return $backupPath
+}
+
+function Export-RegistryKeyIfPresent {
+    param(
+        [Parameter(Mandatory)][string]$RegistryPath,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter(Mandatory)][string]$Description
+    )
+
+    if (-not (Test-Path -LiteralPath $RegistryPath)) {
+        Write-Host "Skip missing: $Description ($RegistryPath)"
+        return $true
+    }
+
+    $regExePath = Join-Path $env:SystemRoot 'System32\reg.exe'
+    $regPath = $RegistryPath -replace '^HKCU:', 'HKCU'
+    $process = Start-Process -FilePath $regExePath `
+        -ArgumentList @('export', $regPath, $OutputPath, '/y') `
+        -NoNewWindow `
+        -PassThru `
+        -Wait
+
+    if ($process.ExitCode -eq 0) {
+        Write-Host "Exported $Description to $OutputPath"
+        return $true
+    }
+    else {
+        Write-Warning "Could not export ${Description}: reg.exe exit code $($process.ExitCode)"
+        return $false
+    }
+}
+
+function Copy-PathToBackupIfPresent {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$BackupPath,
+        [Parameter(Mandatory)][string]$Description
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Host "Skip missing: $Description ($Path)"
+        return
+    }
+
+    $destination = Join-Path $BackupPath (Split-Path -Path $Path -Leaf)
+    try {
+        Copy-Item -LiteralPath $Path -Destination $destination -Recurse -Force -ErrorAction Stop
+        Write-Host "Backed up $Description to $destination"
+    }
+    catch {
+        Write-Warning "Could not back up ${Path}: $($_.Exception.Message)"
+    }
+}
+
+function Move-PathToBackupIfPresent {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$BackupPath,
+        [Parameter(Mandatory)][string]$Description
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Host "Skip missing: $Description ($Path)"
+        return
+    }
+
+    $destination = Join-Path $BackupPath (Split-Path -Path $Path -Leaf)
+    try {
+        Move-Item -LiteralPath $Path -Destination $destination -Force -ErrorAction Stop
+        Write-Host "Moved $Description to $destination"
+    }
+    catch {
+        Write-Warning "Could not move ${Path}: $($_.Exception.Message)"
+    }
+}
+
 function Get-CurrentUserSid {
     try {
         return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -317,6 +427,8 @@ function Clear-TeamsCache {
         Join-Path $env:APPDATA 'Microsoft\Teams\tmp'
         Join-Path $env:APPDATA 'Microsoft\Teams\Cookies'
         Join-Path $env:APPDATA 'Microsoft\Teams\Cookies-journal'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams'
+        Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\TempState'
         Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\Cache'
         Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\GPUCache'
         Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\IndexedDB'
@@ -388,6 +500,7 @@ function Remove-Microsoft365Credential {
         '*OneDrive*',
         '*OneDrive Cached Credential*',
         '*OneAuth*',
+        '*login.microsoftonline.com*',
         '*SSO_POP_Device*',
         '*ADAL*',
         '*MSOID*',
@@ -405,6 +518,7 @@ function Clear-MicrosoftIdentityCache {
     $paths = @(
         Join-Path $env:LOCALAPPDATA 'Packages\MSTeams_8wekyb3d8bbwe'
         Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy'
+        Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.Windows.CloudExperienceHost_cw5n1h2txyewy\AC\TokenBroker\Accounts'
         Join-Path $env:LOCALAPPDATA 'Microsoft\OneAuth'
         Join-Path $env:LOCALAPPDATA 'Microsoft\TokenBroker'
         Join-Path $env:LOCALAPPDATA 'Microsoft\IdentityCache'
@@ -604,6 +718,103 @@ function Invoke-OfficeWamSignOut {
     }
 }
 
+function Clear-NewOutlookAccountState {
+    $resetCommand = Get-Command -Name Reset-AppxPackage -ErrorAction SilentlyContinue
+    if ($resetCommand) {
+        $packages = @(Get-AppxPackage -Name 'Microsoft.OutlookForWindows' -ErrorAction SilentlyContinue)
+        foreach ($package in $packages) {
+            try {
+                Reset-AppxPackage -Package $package.PackageFullName -ErrorAction Stop
+                Write-Host "Reset New Outlook app package: $($package.PackageFullName)"
+            }
+            catch {
+                Write-Warning "Could not reset $($package.PackageFullName): $($_.Exception.Message)"
+            }
+        }
+    }
+    else {
+        Write-Warning 'Reset-AppxPackage is not available on this Windows build.'
+    }
+
+    Get-Process -Name 'olk', 'OutlookForWindows' -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+
+    $newOutlookPackageRoot = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe'
+    $paths = @(
+        Join-Path $newOutlookPackageRoot 'LocalCache'
+        Join-Path $newOutlookPackageRoot 'LocalState'
+        Join-Path $newOutlookPackageRoot 'RoamingState'
+        Join-Path $newOutlookPackageRoot 'Settings'
+        Join-Path $newOutlookPackageRoot 'TempState'
+        Join-Path $newOutlookPackageRoot 'AC'
+    )
+
+    $paths | ForEach-Object { Remove-PathIfPresent -Path $_ }
+}
+
+function Clear-ClassicOutlookProfileState {
+    $backupRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\Outlook\Backups'
+    $backupPath = New-DatedBackupFolder -Root $backupRoot
+    $officeVersions = @('16.0', '15.0')
+
+    $registryBackupFailed = $false
+    foreach ($officeVersion in $officeVersions) {
+        $profilesPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook\Profiles"
+        $outlookPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook"
+
+        $profilesBackedUp = Export-RegistryKeyIfPresent `
+            -RegistryPath $profilesPath `
+            -OutputPath (Join-Path $backupPath "Outlook-Profiles-$officeVersion.reg") `
+            -Description "Outlook profiles $officeVersion"
+
+        $settingsBackedUp = Export-RegistryKeyIfPresent `
+            -RegistryPath $outlookPath `
+            -OutputPath (Join-Path $backupPath "Outlook-Settings-$officeVersion.reg") `
+            -Description "Outlook settings $officeVersion"
+
+        if (-not $profilesBackedUp -or -not $settingsBackedUp) {
+            $registryBackupFailed = $true
+        }
+    }
+
+    if ($registryBackupFailed) {
+        throw 'One or more Outlook registry backups failed. Refusing to remove profiles or move cache files.'
+    }
+
+    $outlookDataPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Outlook'
+    if (Test-Path -LiteralPath $outlookDataPath) {
+        $cacheFiles = @(
+            Get-ChildItem -LiteralPath $outlookDataPath -Filter '*.ost' -File -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -LiteralPath $outlookDataPath -Filter '*.nst' -File -Force -ErrorAction SilentlyContinue
+        )
+
+        foreach ($cacheFile in $cacheFiles) {
+            Move-PathToBackupIfPresent `
+                -Path $cacheFile.FullName `
+                -BackupPath $backupPath `
+                -Description 'classic Outlook cache file'
+        }
+
+        Move-PathToBackupIfPresent `
+            -Path (Join-Path $outlookDataPath 'RoamCache') `
+            -BackupPath $backupPath `
+            -Description 'classic Outlook RoamCache'
+
+        $pstFiles = @(Get-ChildItem -LiteralPath $outlookDataPath -Filter '*.pst' -File -Force -ErrorAction SilentlyContinue)
+        foreach ($pstFile in $pstFiles) {
+            Write-Warning "Leaving PST file in place: $($pstFile.FullName)"
+        }
+    }
+
+    foreach ($officeVersion in $officeVersions) {
+        $profilesPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook\Profiles"
+        $outlookPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook"
+
+        Remove-RegistryPathIfPresent -Path $profilesPath
+        Remove-RegistryValueIfPresent -Path $outlookPath -Name 'DefaultProfile'
+    }
+}
+
 function Invoke-OneDriveReset {
     $oneDrivePaths = Get-ExistingPath -Path @(
         (Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\OneDrive.exe'),
@@ -632,6 +843,25 @@ function Invoke-OneDriveReset {
 }
 
 function Clear-OneDriveAccountState {
+    $backupRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\Backups'
+    $backupPath = New-DatedBackupFolder -Root $backupRoot
+
+    Export-RegistryKeyIfPresent `
+        -RegistryPath 'HKCU:\Software\Microsoft\OneDrive\Accounts' `
+        -OutputPath (Join-Path $backupPath 'OneDrive-Accounts.reg') `
+        -Description 'OneDrive account registry state'
+
+    Export-RegistryKeyIfPresent `
+        -RegistryPath 'HKCU:\Software\Microsoft\OneDrive' `
+        -OutputPath (Join-Path $backupPath 'OneDrive-Settings.reg') `
+        -Description 'OneDrive registry settings'
+
+    $oneDriveLocalRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive'
+    Copy-PathToBackupIfPresent `
+        -Path (Join-Path $oneDriveLocalRoot 'settings') `
+        -BackupPath $backupPath `
+        -Description 'OneDrive settings folder'
+
     Invoke-OneDriveReset
     Start-Sleep -Seconds 2
     Get-Process -Name 'OneDrive' -ErrorAction SilentlyContinue |
@@ -647,9 +877,9 @@ function Clear-OneDriveAccountState {
         }
     }
 
-    Remove-PathIfPresent -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\cache')
-    $businessSettingsPattern = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\settings\Business*'
-    $preSignInSettingsPath = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\settings\PreSignInSettingsConfig.json'
+    Remove-PathIfPresent -Path (Join-Path $oneDriveLocalRoot 'cache')
+    $businessSettingsPattern = Join-Path $oneDriveLocalRoot 'settings\Business*'
+    $preSignInSettingsPath = Join-Path $oneDriveLocalRoot 'settings\PreSignInSettingsConfig.json'
 
     Remove-PathByPatternIfPresent -PathPattern $businessSettingsPattern
     Remove-PathIfPresent -Path $preSignInSettingsPath
@@ -792,6 +1022,12 @@ Remove-TenantCredential
 if ($ClearAllLogins) {
     Write-Step 'Removing broad Office, Teams, OneDrive, and Microsoft 365 credentials'
     Remove-Microsoft365Credential
+
+    Write-Step 'Clearing New Outlook account and app state'
+    Clear-NewOutlookAccountState
+
+    Write-Step 'Clearing classic Outlook profiles and moving OST/NST caches to backup'
+    Clear-ClassicOutlookProfileState
 
     Write-Step 'Resetting Office identity, licensing, and activation state'
     Clear-OfficeRegistryState

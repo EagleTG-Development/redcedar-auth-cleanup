@@ -12,7 +12,8 @@ New Outlook does not use classic Outlook MAPI mail profiles. This script only
 changes local New Outlook app data for the current Windows profile. It does not
 delete mail from Microsoft 365, remove Entra users, change tenant configuration,
 clear classic Outlook profiles, remove work/school accounts, reboot Windows, or
-reset OneDrive/Office licensing state. It does not relaunch New Outlook after cleanup because users should return to classic Outlook.
+reset OneDrive/Office licensing state. It does not relaunch New Outlook after
+cleanup because users should return to classic Outlook.
 
 .EXAMPLE
 .\Clear-NewOutlookAccounts.ps1
@@ -32,11 +33,43 @@ function Invoke-NewOutlookAccountCleanup {
     $ErrorActionPreference = 'Stop'
     $cleanupState = @{
         RemovalWarnings = 0
+        TranscriptPath = $null
     }
 
     function Write-Step {
         param([Parameter(Mandatory)][string]$Message)
         Write-Host "==> $Message" -ForegroundColor Cyan
+    }
+
+    function Start-CleanupTranscript {
+        if ($WhatIfPreference) {
+            return
+        }
+
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+        $path = Join-Path $env:TEMP "Clear-NewOutlookAccounts-$timestamp.log"
+
+        try {
+            Start-Transcript -Path $path -Force | Out-Null
+            Write-Host "Transcript log: $path" -ForegroundColor Cyan
+            $cleanupState.TranscriptPath = $path
+        } catch {
+            $cleanupState.RemovalWarnings++
+            Write-Warning "Could not start transcript logging: $($_.Exception.Message)"
+        }
+    }
+
+    function Stop-CleanupTranscript {
+        if (-not $cleanupState.TranscriptPath) {
+            return
+        }
+
+        try {
+            Stop-Transcript | Out-Null
+            Write-Host "Transcript saved: $($cleanupState.TranscriptPath)" -ForegroundColor Cyan
+        } catch {
+            Write-Warning "Could not stop transcript logging: $($_.Exception.Message)"
+        }
     }
 
     function Assert-WindowsProfilePath {
@@ -203,6 +236,8 @@ function Invoke-NewOutlookAccountCleanup {
     }
 
     Assert-SupportedEnvironment
+    Start-CleanupTranscript
+    try {
     Stop-NewOutlookProcess
     Start-Sleep -Seconds 2
 
@@ -267,6 +302,10 @@ function Invoke-NewOutlookAccountCleanup {
             Path = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker'
             Description = 'AAD BrokerPlugin TokenBroker cache'
         }
+        @{
+            Path = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.Windows.CloudExperienceHost_cw5n1h2txyewy\AC\TokenBroker\Accounts'
+            Description = 'CloudExperienceHost TokenBroker account cache'
+        }
     )
 
     foreach ($identityPath in $identityCachePaths) {
@@ -283,6 +322,9 @@ function Invoke-NewOutlookAccountCleanup {
     }
 
     Write-Host 'Open classic Outlook instead of New Outlook.' -ForegroundColor Green
+    } finally {
+        Stop-CleanupTranscript
+    }
 }
 
 Invoke-NewOutlookAccountCleanup @PSBoundParameters

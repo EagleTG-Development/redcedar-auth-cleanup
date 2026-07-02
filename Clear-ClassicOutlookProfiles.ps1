@@ -36,12 +36,45 @@ function Invoke-ClassicOutlookProfileCleanup {
     $ErrorActionPreference = 'Stop'
     $cleanupState = @{
         BackupPath = $null
+        RegistryBackupFailures = 0
+        TranscriptPath = $null
         Warnings = 0
     }
 
     function Write-Step {
         param([Parameter(Mandatory)][string]$Message)
         Write-Host "==> $Message" -ForegroundColor Cyan
+    }
+
+    function Start-CleanupTranscript {
+        if ($WhatIfPreference) {
+            return
+        }
+
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+        $path = Join-Path $env:TEMP "Clear-ClassicOutlookProfiles-$timestamp.log"
+
+        try {
+            Start-Transcript -Path $path -Force | Out-Null
+            Write-Host "Transcript log: $path" -ForegroundColor Cyan
+            $cleanupState.TranscriptPath = $path
+        } catch {
+            $cleanupState.Warnings++
+            Write-Warning "Could not start transcript logging: $($_.Exception.Message)"
+        }
+    }
+
+    function Stop-CleanupTranscript {
+        if (-not $cleanupState.TranscriptPath) {
+            return
+        }
+
+        try {
+            Stop-Transcript | Out-Null
+            Write-Host "Transcript saved: $($cleanupState.TranscriptPath)" -ForegroundColor Cyan
+        } catch {
+            Write-Warning "Could not stop transcript logging: $($_.Exception.Message)"
+        }
     }
 
     function Assert-WindowsProfilePath {
@@ -123,7 +156,7 @@ function Invoke-ClassicOutlookProfileCleanup {
         $backupRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\Outlook\Backups'
         Assert-SafeOutlookPath -Path $backupRoot
 
-        $backupPath = Join-Path $backupRoot (Get-Date -Format 'yyyyMMdd-HHmmss')
+        $backupPath = Join-Path $backupRoot (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
         Assert-SafeOutlookPath -Path $backupPath
 
         if ($PSCmdlet.ShouldProcess($backupPath, 'Create Outlook backup folder')) {
@@ -156,6 +189,7 @@ function Invoke-ClassicOutlookProfileCleanup {
                 -Wait
 
             if ($process.ExitCode -ne 0) {
+                $cleanupState.RegistryBackupFailures++
                 $cleanupState.Warnings++
                 Write-Warning "Could not export ${Description}: reg.exe exit code $($process.ExitCode)"
             }
@@ -270,6 +304,8 @@ function Invoke-ClassicOutlookProfileCleanup {
     }
 
     Assert-SupportedEnvironment
+    Start-CleanupTranscript
+    try {
     Stop-OutlookProcess
     Start-Sleep -Seconds 2
 
@@ -291,6 +327,10 @@ function Invoke-ClassicOutlookProfileCleanup {
             -RegistryPath $outlookPath `
             -OutputPath (Join-Path $backupPath "Outlook-Settings-$officeVersion.reg") `
             -Description "Outlook settings $officeVersion"
+    }
+
+    if ($cleanupState.RegistryBackupFailures -gt 0) {
+        throw 'One or more Outlook registry backups failed. Refusing to remove profiles or move cache files.'
     }
 
     Write-Step 'Moving classic Outlook OST/NST cache files to backup'
@@ -316,6 +356,9 @@ function Invoke-ClassicOutlookProfileCleanup {
 
     Write-Host "Backup folder: $($cleanupState.BackupPath)" -ForegroundColor Green
     Write-Host 'Open classic Outlook and create/sign into a fresh profile if prompted.' -ForegroundColor Green
+    } finally {
+        Stop-CleanupTranscript
+    }
 }
 
 Invoke-ClassicOutlookProfileCleanup @PSBoundParameters

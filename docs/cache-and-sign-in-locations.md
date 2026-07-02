@@ -25,7 +25,7 @@ It only removes local Teams desktop cache for the current Windows user.
 ## New Outlook app data folders
 
 New Outlook for Windows stores local account and app state in its Windows app package data, not in classic Outlook MAPI profiles.
-The New Outlook cleanup script clears these package folders for the current Windows user:
+The New Outlook cleanup script and `Clear-WorkAccountsAndReboot.ps1 -Tenant ALL` clear these package folders for the current Windows user:
 
 - `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\LocalCache`
 - `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\LocalState`
@@ -46,10 +46,11 @@ Classic Outlook mail profiles are stored in the current user's Office registry k
 - `HKCU:\Software\Microsoft\Office\16.0\Outlook\Profiles`
 - `HKCU:\Software\Microsoft\Office\15.0\Outlook\Profiles`
 
-`Clear-ClassicOutlookProfiles.ps1` exports those keys, plus the matching Outlook settings keys, into a dated backup folder under:
+`Clear-ClassicOutlookProfiles.ps1` and `Clear-WorkAccountsAndReboot.ps1 -Tenant ALL` export those keys, plus the matching Outlook settings keys, into a dated backup folder under:
 
-- `%LocalAppData%\Microsoft\Outlook\Backups\yyyyMMdd-HHmmss`
+- `%LocalAppData%\Microsoft\Outlook\Backups\yyyyMMdd-HHmmss-fff`
 
+If a registry export fails, the script stops before moving cache files or removing profiles.
 It then removes the profile keys and `DefaultProfile` values.
 The script also moves these local cache items into the same backup folder:
 
@@ -68,9 +69,10 @@ The `-IncludeIdentityCache` option in `Clear-TeamsCache.ps1` removes Microsoft i
 - `%LocalAppData%\Microsoft\TokenBroker`
 - `%LocalAppData%\Microsoft\IdentityCache`
 
-`Clear-NewOutlookAccounts.ps1` also removes:
+`Clear-NewOutlookAccounts.ps1`, `Clear-OneDriveWorkAccount.ps1`, and `Clear-WorkAccountsAndReboot.ps1 -Tenant ALL` also remove:
 
 - `%LocalAppData%\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker`
+- `%LocalAppData%\Packages\Microsoft.Windows.CloudExperienceHost_cw5n1h2txyewy\AC\TokenBroker\Accounts`
 
 These locations can contain local Microsoft account picker, token broker, tenant, and sign-in session metadata.
 Clearing them can help when Teams or New Outlook still prefers an old account or tenant after the normal app cleanup runs.
@@ -102,13 +104,28 @@ Expected impact:
 
 ## OneDrive work/school state
 
-`Clear-WorkAccountsAndReboot.ps1 -Tenant ALL` resets OneDrive and removes work/school OneDrive account state from the current Windows profile.
+`Clear-OneDriveWorkAccount.ps1` and `Clear-WorkAccountsAndReboot.ps1 -Tenant ALL` reset OneDrive and remove work/school OneDrive account state from the current Windows profile.
 This can help when OneDrive is stuck on an old tenant or stale account.
+
+`Clear-OneDriveWorkAccount.ps1` and `Clear-WorkAccountsAndReboot.ps1 -Tenant ALL` back up OneDrive registry/settings state under:
+
+- `%LocalAppData%\Microsoft\OneDrive\Backups\yyyyMMdd-HHmmss-fff`
+
+It then removes or clears:
+
+- `HKCU:\Software\Microsoft\OneDrive\Accounts\Business*`
+- `%LocalAppData%\Microsoft\OneDrive\cache`
+- `%LocalAppData%\Microsoft\OneDrive\settings\Business*`
+- `%LocalAppData%\Microsoft\OneDrive\settings\PreSignInSettingsConfig.json`
+
+It also clears Microsoft identity caches and common OneDrive/Microsoft cached Credential Manager entries.
 
 Expected impact:
 
-- OneDrive may need to be set up again after reboot.
+- OneDrive may need to be set up again after cleanup.
+- Teams, Outlook, Office, or other Microsoft apps may ask the user to sign in again.
 - Existing cloud files are not deleted.
+- Synced OneDrive folders under the user's profile are not deleted or moved.
 - Locally synced folders may need to be relinked.
 
 ## Device join and Access work or school

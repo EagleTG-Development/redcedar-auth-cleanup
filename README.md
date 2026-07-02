@@ -2,11 +2,12 @@
 
 Use this repo when Teams, OneDrive, Outlook, or Office keeps using the wrong RedCedar/EagleTG tenant, stale account, or stale Teams contact.
 
-There are four scripts:
+There are five scripts:
 
 - `Clear-TeamsCache.ps1`: light cleanup for Teams cache and stale Teams search/chat identity issues.
 - `Clear-NewOutlookAccounts.ps1`: cleanup for New Outlook account/app state and stale Outlook sign-in choices.
 - `Clear-ClassicOutlookProfiles.ps1`: cleanup for classic Outlook mail profiles with dated OST/NST backups.
+- `Clear-OneDriveWorkAccount.ps1`: cleanup for OneDrive work/school account state and cached sign-ins.
 - `Clear-WorkAccountsAndReboot.ps1`: broader Microsoft 365 sign-in cleanup for RedCedar/EagleTG tenant login problems, followed by a reboot.
 
 ## Table of contents
@@ -15,7 +16,8 @@ There are four scripts:
 - [Option 1: clear Teams cache only](#option-1-clear-teams-cache-only)
 - [Option 2: clear New Outlook accounts only](#option-2-clear-new-outlook-accounts-only)
 - [Option 3: clear classic Outlook mail profiles only](#option-3-clear-classic-outlook-mail-profiles-only)
-- [Option 4: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot](#option-4-clear-redcedareagletg-microsoft-365-sign-in-state-and-reboot)
+- [Option 4: clear OneDrive work/school account state only](#option-4-clear-onedrive-workschool-account-state-only)
+- [Option 5: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot](#option-5-clear-redcedareagletg-microsoft-365-sign-in-state-and-reboot)
 - [Before you run a script](#before-you-run-a-script)
 - [What each script changes](#what-each-script-changes)
 - [What these scripts do not change](#what-these-scripts-do-not-change)
@@ -48,6 +50,14 @@ This script does not clear classic Outlook mail profiles.
 - You want to move OST/NST cache files into a dated backup folder before profile removal.
 
 This script does not clear New Outlook app state.
+
+### Use `Clear-OneDriveWorkAccount.ps1` when
+
+- OneDrive keeps signing into the wrong work/school tenant.
+- OneDrive account picker or cached sign-in state is stale.
+- You want to reset OneDrive work/school account state without deleting synced folders.
+
+This script does not delete or move synced OneDrive folders.
 
 ### Use `Clear-WorkAccountsAndReboot.ps1` when
 
@@ -140,7 +150,30 @@ The script:
 
 The script does not move PST files. PST files may contain local-only archive data and should be handled manually.
 
-## Option 4: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot
+## Option 4: clear OneDrive work/school account state only
+
+### Recommended command
+
+```powershell
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-OneDriveWorkAccount.ps1?$(Get-Date -Format yyyyMMddHHmmss)" | iex
+```
+
+The script:
+
+1. Stops OneDrive.
+2. Creates a dated backup folder under `%LocalAppData%\Microsoft\OneDrive\Backups`.
+3. Exports OneDrive account/settings registry keys to the backup folder.
+4. Copies OneDrive settings into the backup folder.
+5. Requests a OneDrive reset with `OneDrive.exe /reset`.
+6. Removes OneDrive work/school account registry keys.
+7. Clears OneDrive cache and business settings.
+8. Clears Microsoft identity/token broker caches.
+9. Removes common OneDrive/Microsoft cached Credential Manager entries.
+10. Leaves synced OneDrive folders untouched.
+
+Clearing Microsoft identity caches and cached credentials can sign Outlook, Teams, Office, OneDrive, or other Microsoft apps out for the current Windows user.
+
+## Option 5: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot
 
 ### RedCedar / RCTG users
 
@@ -162,15 +195,15 @@ irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-WorkAccountsAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -Tenant Both
 ```
 
-### Last resort: clear all Microsoft 365 logins
+### Last resort: the [Sledgehammer](https://www.youtube.com/watch?v=OJWJE0x7T4Q) version
 
-Use this only if the commands above do not fix the problem:
+Use `-Tenant ALL` only if the commands above do not fix the problem:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-WorkAccountsAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -Tenant ALL
 ```
 
-`-Tenant ALL` may sign you out of other Microsoft 365 tenants or organizations on this Windows profile.
+The [Sledgehammer](https://www.youtube.com/watch?v=OJWJE0x7T4Q) version may sign you out of other Microsoft 365 tenants or organizations on this Windows profile.
 It also resets Office sign-in/licensing state, signs out Office WAM accounts, clears the New Teams account picker cache, and resets OneDrive work/school sync connections.
 
 You may need to sign back in and relink OneDrive after reboot.
@@ -229,6 +262,8 @@ By default, this script:
   - `%LocalAppData%\Microsoft\TokenBroker`
   - `%LocalAppData%\Microsoft\IdentityCache`
   - `%LocalAppData%\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker`
+  - `%LocalAppData%\Packages\Microsoft.Windows.CloudExperienceHost_cw5n1h2txyewy\AC\TokenBroker\Accounts`
+- Writes a transcript log under `%TEMP%`.
 
 ### `Clear-ClassicOutlookProfiles.ps1`
 
@@ -237,11 +272,37 @@ By default, this script:
 - Stops classic Outlook processes.
 - Creates a dated backup folder under `%LocalAppData%\Microsoft\Outlook\Backups`.
 - Exports profile/settings registry keys for Office 16.0 and 15.0.
+- Stops before moving caches or removing profiles if a registry backup fails.
 - Moves `*.ost`, `*.nst`, and `RoamCache` from `%LocalAppData%\Microsoft\Outlook` into the backup folder.
 - Removes classic Outlook profile registry keys for Office 16.0 and 15.0.
 - Removes classic Outlook `DefaultProfile` values for Office 16.0 and 15.0.
 - Leaves PST files in place.
 - Leaves Outlook closed.
+- Writes a transcript log under `%TEMP%`.
+
+### `Clear-OneDriveWorkAccount.ps1`
+
+By default, this script:
+
+- Stops OneDrive processes.
+- Creates a dated backup folder under `%LocalAppData%\Microsoft\OneDrive\Backups`.
+- Exports OneDrive account/settings registry state.
+- Backs up OneDrive settings from `%LocalAppData%\Microsoft\OneDrive\settings`.
+- Requests a OneDrive reset with `OneDrive.exe /reset`.
+- Removes `HKCU:\Software\Microsoft\OneDrive\Accounts\Business*` registry keys.
+- Clears:
+  - `%LocalAppData%\Microsoft\OneDrive\cache`
+  - `%LocalAppData%\Microsoft\OneDrive\settings\Business*`
+  - `%LocalAppData%\Microsoft\OneDrive\settings\PreSignInSettingsConfig.json`
+- Clears Microsoft identity caches:
+  - `%LocalAppData%\Microsoft\OneAuth`
+  - `%LocalAppData%\Microsoft\TokenBroker`
+  - `%LocalAppData%\Microsoft\IdentityCache`
+  - `%LocalAppData%\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker`
+  - `%LocalAppData%\Packages\Microsoft.Windows.CloudExperienceHost_cw5n1h2txyewy\AC\TokenBroker\Accounts`
+- Removes common OneDrive/Microsoft cached Credential Manager entries.
+- Leaves synced OneDrive folders untouched.
+- Writes a transcript log under `%TEMP%`.
 
 ### `Clear-WorkAccountsAndReboot.ps1`
 
@@ -258,14 +319,17 @@ Tenant matching uses these known IDs/domains:
 - ETG: `80240792-cbae-4f23-942c-b82db959df1b`, `eagletg.com`, `eagletg.net`, `eagletgus.onmicrosoft.com`, `aquilarey.com`
 - RCTG: `befedfad-14ec-423b-8dc8-3289d325c95b`, `redcedartg.com`, `redcedartgus.onmicrosoft.com`, `modocfsg.com`, `tumbijv.com`
 
-`-Tenant ALL` also:
+The [Sledgehammer](https://www.youtube.com/watch?v=OJWJE0x7T4Q) version (`-Tenant ALL`) also runs the standalone cleanup behaviors together:
 
-- Removes broader Microsoft 365 credentials for Office, Teams, OneDrive, OneAuth, Outlook, AAD, MSOID, and ADAL.
+- Removes broader Microsoft 365 credentials for Office, Teams, OneDrive, OneAuth, Outlook, AAD, MSOID, ADAL, and Microsoft Online sign-in.
+- Clears New Outlook account/app state and uses `Reset-AppxPackage` for `Microsoft.OutlookForWindows` when available.
+- Backs up and removes classic Outlook mail profiles, moves OST/NST caches and `RoamCache` into a dated backup folder, and leaves PST files in place.
+- Stops before moving classic Outlook caches or removing profiles if a registry backup fails.
 - Resets Office identity, licensing, activation, roaming identity, web service, services manager, and registration state for Office 15.0/16.0 in the current Windows profile.
 - Clears Office license cache folders.
 - Removes cached Office Click-to-Run user/tenant values when the script has permission.
 - Signs out Office WAM accounts for the current Windows profile.
-- Resets OneDrive and removes work/school OneDrive account state.
+- Backs up OneDrive account/settings state, resets OneDrive, removes work/school OneDrive account state, and clears OneDrive business settings/cache.
 - Clears Microsoft identity/account-picker caches.
 
 ## What these scripts do not change
@@ -281,6 +345,7 @@ They do not delete or modify:
 - Teams chat history stored in Microsoft 365
 - Outlook mailbox data stored in Microsoft 365
 - PST archive files
+- Synced OneDrive folders under the user's profile
 - Classic Outlook mail profiles, unless a script explicitly says it handles classic Outlook
 - Entra users or guest accounts
 
@@ -307,6 +372,10 @@ irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup
 
 ```powershell
 irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-ClassicOutlookProfiles.ps1?$(Get-Date -Format yyyyMMddHHmmss)"
+```
+
+```powershell
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-OneDriveWorkAccount.ps1?$(Get-Date -Format yyyyMMddHHmmss)"
 ```
 
 ```powershell
