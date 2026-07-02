@@ -195,7 +195,7 @@ irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-WorkAccountsAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -Tenant Both
 ```
 
-### Last resort: the [Sledgehammer](https://www.youtube.com/watch?v=OJWJE0x7T4Q) version
+### Last resort: the [Sledgehammer](https://youtu.be/OJWJE0x7T4Q?t=15) version
 
 Use `-Tenant ALL` only if the commands above do not fix the problem:
 
@@ -203,7 +203,7 @@ Use `-Tenant ALL` only if the commands above do not fix the problem:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-WorkAccountsAndReboot.ps1?$(Get-Date -Format yyyyMMddHHmmss)"))) -Tenant ALL
 ```
 
-The [Sledgehammer](https://www.youtube.com/watch?v=OJWJE0x7T4Q) version may sign you out of other Microsoft 365 tenants or organizations on this Windows profile.
+The [Sledgehammer](https://youtu.be/OJWJE0x7T4Q?t=15) version may sign you out of other Microsoft 365 tenants or organizations on this Windows profile.
 It also resets Office sign-in/licensing state, signs out Office WAM accounts, clears the New Teams account picker cache, and resets OneDrive work/school sync connections.
 
 You may need to sign back in and relink OneDrive after reboot.
@@ -319,7 +319,7 @@ Tenant matching uses these known IDs/domains:
 - ETG: `80240792-cbae-4f23-942c-b82db959df1b`, `eagletg.com`, `eagletg.net`, `eagletgus.onmicrosoft.com`, `aquilarey.com`
 - RCTG: `befedfad-14ec-423b-8dc8-3289d325c95b`, `redcedartg.com`, `redcedartgus.onmicrosoft.com`, `modocfsg.com`, `tumbijv.com`
 
-The [Sledgehammer](https://www.youtube.com/watch?v=OJWJE0x7T4Q) version (`-Tenant ALL`) also runs the standalone cleanup behaviors together:
+The [Sledgehammer](https://youtu.be/OJWJE0x7T4Q?t=15) version (`-Tenant ALL`) also runs the standalone cleanup behaviors together:
 
 - Removes broader Microsoft 365 credentials for Office, Teams, OneDrive, OneAuth, Outlook, AAD, MSOID, ADAL, and Microsoft Online sign-in.
 - Clears New Outlook account/app state and uses `Reset-AppxPackage` for `Microsoft.OutlookForWindows` when available.
