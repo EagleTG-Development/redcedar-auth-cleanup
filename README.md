@@ -1,18 +1,20 @@
 # Microsoft 365 sign-in cleanup for RedCedar / EagleTG
 
-Use this repo when Teams, OneDrive, or Office keeps using the wrong RedCedar/EagleTG tenant, stale account, or stale Teams contact.
+Use this repo when Teams, OneDrive, Outlook, or Office keeps using the wrong RedCedar/EagleTG tenant, stale account, or stale Teams contact.
 
-There are two scripts:
+There are three scripts:
 
 - `Clear-TeamsCache.ps1`: light cleanup for Teams cache and stale Teams search/chat identity issues.
+- `Clear-NewOutlookAccounts.ps1`: light cleanup for New Outlook account/app state and stale Outlook sign-in choices.
 - `Clear-WorkAccountsAndReboot.ps1`: broader Microsoft 365 sign-in cleanup for RedCedar/EagleTG tenant login problems, followed by a reboot.
 
 ## Table of contents
 
 - [Which script should I use?](#which-script-should-i-use)
 - [Option 1: clear Teams cache only](#option-1-clear-teams-cache-only)
-- [Option 2: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot](#option-2-clear-redcedareagletg-microsoft-365-sign-in-state-and-reboot)
-- [Before you run either script](#before-you-run-either-script)
+- [Option 2: clear New Outlook accounts only](#option-2-clear-new-outlook-accounts-only)
+- [Option 3: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot](#option-3-clear-redcedareagletg-microsoft-365-sign-in-state-and-reboot)
+- [Before you run a script](#before-you-run-a-script)
 - [What each script changes](#what-each-script-changes)
 - [What these scripts do not change](#what-these-scripts-do-not-change)
 - [More details](#more-details)
@@ -28,6 +30,14 @@ There are two scripts:
 - You only want to close Teams, clear Teams cache, and reopen Teams.
 
 Start here for stale Teams contact issues.
+
+### Use `Clear-NewOutlookAccounts.ps1` when
+
+- New Outlook keeps showing stale accounts or mailbox choices.
+- New Outlook keeps returning to the wrong tenant after account changes.
+- You only want to close New Outlook, clear New Outlook app/account state, and reopen New Outlook.
+
+This script does not clear classic Outlook mail profiles.
 
 ### Use `Clear-WorkAccountsAndReboot.ps1` when
 
@@ -79,7 +89,28 @@ irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup
 & $Script -NoLaunch
 ```
 
-## Option 2: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot
+## Option 2: clear New Outlook accounts only
+
+### Recommended command
+
+```powershell
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-NewOutlookAccounts.ps1?$(Get-Date -Format yyyyMMddHHmmss)" | iex
+```
+
+The script:
+
+1. Stops New Outlook.
+2. Resets the New Outlook app package when Windows supports `Reset-AppxPackage`.
+3. Clears New Outlook for Windows package app data for the current Windows user.
+4. Clears local Microsoft account-picker/token broker cache folders.
+5. Leaves New Outlook closed so users can open classic Outlook instead.
+
+New Outlook does not use classic Outlook MAPI mail profiles. This cleanup resets local New Outlook app/account state, but it does not delete mail from Microsoft 365.
+
+Clearing Microsoft identity caches can sign Outlook, Teams, Office, OneDrive, or other Microsoft apps out for the current Windows user.
+
+
+## Option 3: clear RedCedar/EagleTG Microsoft 365 sign-in state and reboot
 
 ### RedCedar / RCTG users
 
@@ -114,10 +145,10 @@ It also resets Office sign-in/licensing state, signs out Office WAM accounts, cl
 
 You may need to sign back in and relink OneDrive after reboot.
 
-## Before you run either script
+## Before you run a script
 
 1. Save your work.
-2. Close any Teams calls or meetings.
+2. Close any Teams calls or Outlook compose windows.
 3. Run the command that matches your issue.
 4. If using the reboot script, the computer will reboot automatically.
 5. After cleanup, sign back in with your normal work email address if prompted.
@@ -148,6 +179,27 @@ With `-IncludeIdentityCache`, it also clears:
 - `%LocalAppData%\Microsoft\OneAuth`
 - `%LocalAppData%\Microsoft\TokenBroker`
 - `%LocalAppData%\Microsoft\IdentityCache`
+
+### `Clear-NewOutlookAccounts.ps1`
+
+By default, this script:
+
+- Stops New Outlook processes.
+- Clears New Outlook for Windows app data:
+  - `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\LocalCache`
+  - `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\LocalState`
+  - `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\RoamingState`
+  - `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\Settings`
+  - `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\TempState`
+  - `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\AC`
+- Uses `Reset-AppxPackage` for `Microsoft.OutlookForWindows` when available.
+- Leaves New Outlook closed so users can open classic Outlook instead.
+- Clears Microsoft identity cache folders:
+
+- `%LocalAppData%\Microsoft\OneAuth`
+- `%LocalAppData%\Microsoft\TokenBroker`
+- `%LocalAppData%\Microsoft\IdentityCache`
+- `%LocalAppData%\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker`
 
 ### `Clear-WorkAccountsAndReboot.ps1`
 
@@ -185,6 +237,8 @@ They do not delete or modify:
 - Domain join or Entra join
 - Microsoft 365 tenant configuration
 - Teams chat history stored in Microsoft 365
+- Outlook mailbox data stored in Microsoft 365
+- Classic Outlook mail profiles, unless a script explicitly says it handles classic Outlook
 - Entra users or guest accounts
 
 The reboot script prints `dsregcmd /status` tenant and join state before cleanup.
@@ -202,6 +256,10 @@ To view a script instead of running it:
 
 ```powershell
 irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-TeamsCache.ps1?$(Get-Date -Format yyyyMMddHHmmss)"
+```
+
+```powershell
+irm "https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-NewOutlookAccounts.ps1?$(Get-Date -Format yyyyMMddHHmmss)"
 ```
 
 ```powershell

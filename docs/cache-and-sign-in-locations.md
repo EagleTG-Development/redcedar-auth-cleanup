@@ -22,20 +22,42 @@ The Teams-only script clears common New Teams and Classic Teams cache folders:
 Clearing these folders does not delete Teams chat history from Microsoft 365.
 It only removes local Teams desktop cache for the current Windows user.
 
+## New Outlook app data folders
+
+New Outlook for Windows stores local account and app state in its Windows app package data, not in classic Outlook MAPI profiles.
+The New Outlook cleanup script clears these package folders for the current Windows user:
+
+- `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\LocalCache`
+- `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\LocalState`
+- `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\RoamingState`
+- `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\Settings`
+- `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\TempState`
+- `%LocalAppData%\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\AC`
+
+The script also uses `Reset-AppxPackage` for `Microsoft.OutlookForWindows` when that cmdlet is available.
+
+Clearing these folders does not delete mailbox data from Microsoft 365.
+It only removes local New Outlook app/account state for the current Windows user.
+
 ## Microsoft identity cache folders
 
-The `-IncludeIdentityCache` option in `Clear-TeamsCache.ps1` removes Teams-adjacent Microsoft identity cache folders:
+The `-IncludeIdentityCache` option in `Clear-TeamsCache.ps1` removes Microsoft identity cache folders.
+`Clear-NewOutlookAccounts.ps1` always removes these identity cache folders:
 
 - `%LocalAppData%\Microsoft\OneAuth`
 - `%LocalAppData%\Microsoft\TokenBroker`
 - `%LocalAppData%\Microsoft\IdentityCache`
 
+`Clear-NewOutlookAccounts.ps1` also removes:
+
+- `%LocalAppData%\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker`
+
 These locations can contain local Microsoft account picker, token broker, tenant, and sign-in session metadata.
-Clearing them can help when Teams still prefers an old account or tenant after the normal Teams cache is cleared.
+Clearing them can help when Teams or New Outlook still prefers an old account or tenant after the normal app cleanup runs.
 
 Expected impact:
 
-- Teams or other Microsoft apps may ask the user to sign in again.
+- Teams, Outlook, Office, OneDrive, or other Microsoft apps may ask the user to sign in again.
 - Account picker entries may be rebuilt after sign-in.
 - Cloud accounts, files, chats, and tenant users are not deleted.
 
