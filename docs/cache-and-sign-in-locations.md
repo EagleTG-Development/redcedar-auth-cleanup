@@ -39,6 +39,26 @@ The script also uses `Reset-AppxPackage` for `Microsoft.OutlookForWindows` when 
 Clearing these folders does not delete mailbox data from Microsoft 365.
 It only removes local New Outlook app/account state for the current Windows user.
 
+## Classic Outlook profile and cache locations
+
+Classic Outlook mail profiles are stored in the current user's Office registry keys:
+
+- `HKCU:\Software\Microsoft\Office\16.0\Outlook\Profiles`
+- `HKCU:\Software\Microsoft\Office\15.0\Outlook\Profiles`
+
+`Clear-ClassicOutlookProfiles.ps1` exports those keys, plus the matching Outlook settings keys, into a dated backup folder under:
+
+- `%LocalAppData%\Microsoft\Outlook\Backups\yyyyMMdd-HHmmss`
+
+It then removes the profile keys and `DefaultProfile` values.
+The script also moves these local cache items into the same backup folder:
+
+- `%LocalAppData%\Microsoft\Outlook\*.ost`
+- `%LocalAppData%\Microsoft\Outlook\*.nst`
+- `%LocalAppData%\Microsoft\Outlook\RoamCache`
+
+PST files are left in place because they may contain local-only archive data.
+
 ## Microsoft identity cache folders
 
 The `-IncludeIdentityCache` option in `Clear-TeamsCache.ps1` removes Microsoft identity cache folders.
