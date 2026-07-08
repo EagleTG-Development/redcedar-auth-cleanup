@@ -1,17 +1,18 @@
 <#
 .SYNOPSIS
-Clears classic Outlook mail profiles for the current Windows user.
+Clears local Outlook account/profile state for the current Windows user.
 
 .DESCRIPTION
-Stops classic Outlook, backs up Outlook profile registry keys, moves local OST/NST
-cache files and RoamCache into a dated backup folder, then removes classic Outlook
-mail profile registry keys for the current Windows profile.
+Stops classic Outlook and New Outlook, backs up Outlook profile registry keys,
+moves local OST/NST cache files and RoamCache into a dated backup folder, removes
+classic Outlook mail profile registry keys, and clears New Outlook app/account
+state for the current Windows profile.
 
 Backups are written under:
 %LocalAppData%\Microsoft\Outlook\Backups\yyyyMMdd-HHmmss
 
-This script targets classic Outlook MAPI profiles. It does not clear New Outlook
-for Windows app state, delete mailbox data from Microsoft 365, remove Entra users,
+This script clears both classic Outlook MAPI profiles and New Outlook for Windows
+app state. It does not delete mailbox data from Microsoft 365, remove Entra users,
 change tenant configuration, remove work/school accounts, reboot Windows, or reset
 OneDrive/Office licensing state.
 
@@ -141,9 +142,9 @@ function Invoke-ClassicOutlookProfileCleanup {
     }
 
     function Stop-OutlookProcess {
-        Write-Step 'Stopping classic Outlook processes'
+        Write-Step 'Stopping Outlook processes'
 
-        $processes = @(Get-Process -Name 'OUTLOOK' -ErrorAction SilentlyContinue)
+        $processes = @(Get-Process -Name 'OUTLOOK', 'olk', 'OutlookForWindows' -ErrorAction SilentlyContinue)
         foreach ($process in $processes) {
             $target = "$($process.ProcessName) pid $($process.Id)"
             if ($PSCmdlet.ShouldProcess($target, 'Stop process')) {
@@ -303,6 +304,133 @@ function Invoke-ClassicOutlookProfileCleanup {
         }
     }
 
+    function Assert-SafeLocalAppDataPath {
+        param([Parameter(Mandatory)][string]$Path)
+
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            throw 'Refusing to clean an empty path.'
+        }
+
+        if (Test-PathWithinRoot -Path $Path -Root $env:LOCALAPPDATA) {
+            return
+        }
+
+        throw "Refusing to clean path outside the current user's local app data folder: $Path"
+    }
+
+    function Remove-PathContents {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$Description
+        )
+
+        Assert-SafeLocalAppDataPath -Path $Path
+
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
+            return
+        }
+
+        if ($PSCmdlet.ShouldProcess($Path, "Clear $Description")) {
+            try {
+                $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)
+            } catch {
+                $cleanupState.Warnings++
+                Write-Warning "Could not list ${Path}: $($_.Exception.Message)"
+                return
+            }
+
+            foreach ($child in $children) {
+                try {
+                    Remove-Item -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop
+                } catch {
+                    $cleanupState.Warnings++
+                    Write-Warning "Could not remove $($child.FullName): $($_.Exception.Message)"
+                }
+            }
+        }
+    }
+
+    function Remove-PathTree {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$Description
+        )
+
+        Assert-SafeLocalAppDataPath -Path $Path
+
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
+            return
+        }
+
+        if ($PSCmdlet.ShouldProcess($Path, "Remove $Description")) {
+            try {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            } catch {
+                $cleanupState.Warnings++
+                Write-Warning "Could not remove ${Path}: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    function Clear-NewOutlookAccountState {
+        Write-Step 'Resetting New Outlook app package'
+        $resetCommand = Get-Command -Name Reset-AppxPackage -ErrorAction SilentlyContinue
+        if ($resetCommand) {
+            $packages = @(Get-AppxPackage -Name 'Microsoft.OutlookForWindows' -ErrorAction SilentlyContinue)
+            foreach ($package in $packages) {
+                if ($PSCmdlet.ShouldProcess($package.PackageFullName, 'Reset New Outlook app package')) {
+                    try {
+                        Reset-AppxPackage -Package $package.PackageFullName -ErrorAction Stop
+                    } catch {
+                        $cleanupState.Warnings++
+                        Write-Warning "Could not reset $($package.PackageFullName): $($_.Exception.Message)"
+                    }
+                }
+            }
+        } else {
+            Write-Warning 'Reset-AppxPackage is not available on this Windows build. Continuing with folder cleanup.'
+        }
+
+        Write-Step 'Clearing New Outlook app data folders'
+        $newOutlookPackageRoot = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe'
+        $newOutlookDataPaths = @(
+            @{
+                Path = Join-Path $newOutlookPackageRoot 'LocalCache'
+                Description = 'New Outlook local cache'
+            }
+            @{
+                Path = Join-Path $newOutlookPackageRoot 'LocalState'
+                Description = 'New Outlook local state'
+            }
+            @{
+                Path = Join-Path $newOutlookPackageRoot 'RoamingState'
+                Description = 'New Outlook roaming state'
+            }
+            @{
+                Path = Join-Path $newOutlookPackageRoot 'Settings'
+                Description = 'New Outlook settings'
+            }
+            @{
+                Path = Join-Path $newOutlookPackageRoot 'TempState'
+                Description = 'New Outlook temp state'
+            }
+            @{
+                Path = Join-Path $newOutlookPackageRoot 'AC'
+                Description = 'New Outlook app container cache'
+            }
+        )
+
+        foreach ($dataPath in $newOutlookDataPaths) {
+            Remove-PathContents -Path $dataPath.Path -Description $dataPath.Description
+        }
+
+        Remove-PathTree `
+            -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\olk') `
+            -Description 'New Outlook local profile/cache root'
+    }
+
     Assert-SupportedEnvironment
     Start-CleanupTranscript
     try {
@@ -336,6 +464,8 @@ function Invoke-ClassicOutlookProfileCleanup {
     Write-Step 'Moving classic Outlook OST/NST cache files to backup'
     Move-OutlookCacheFiles -BackupPath $backupPath
 
+    Clear-NewOutlookAccountState
+
     Write-Step 'Removing classic Outlook mail profiles'
     foreach ($officeVersion in $officeVersions) {
         $profilesPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook\Profiles"
@@ -347,15 +477,15 @@ function Invoke-ClassicOutlookProfileCleanup {
 
     Write-Host ''
     if ($cleanupState.Warnings -gt 0) {
-        $message = "Classic Outlook cleanup finished with $($cleanupState.Warnings) warning(s). " +
+        $message = "Outlook cleanup finished with $($cleanupState.Warnings) warning(s). " +
             'Review the messages above before opening Outlook.'
         Write-Warning $message
     } else {
-        Write-Host 'Classic Outlook profile cleanup complete.' -ForegroundColor Green
+        Write-Host 'Outlook cleanup complete.' -ForegroundColor Green
     }
 
     Write-Host "Backup folder: $($cleanupState.BackupPath)" -ForegroundColor Green
-    Write-Host 'Open classic Outlook and create/sign into a fresh profile if prompted.' -ForegroundColor Green
+    Write-Host 'Open Outlook and create/sign into a fresh profile if prompted.' -ForegroundColor Green
     } finally {
         Stop-CleanupTranscript
     }

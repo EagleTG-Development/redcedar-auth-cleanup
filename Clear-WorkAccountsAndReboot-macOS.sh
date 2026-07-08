@@ -4,7 +4,7 @@
 #
 # macOS equivalent of Clear-WorkAccountsAndReboot.ps1
 # Stops Microsoft 365 apps, clears tenant-scoped Keychain entries,
-# removes Teams/OneDrive/Office caches, and reboots.
+# removes Teams/Outlook/OneDrive/Office caches, and reboots.
 #
 # Usage:
 #   curl -sL https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-WorkAccountsAndReboot-macOS.sh | bash
@@ -168,6 +168,21 @@ for path in "${ONEDRIVE_CACHE_PATHS[@]}"; do
     fi
 done
 
+# --- Clear Outlook caches/profiles ---
+log_step "Clearing Outlook caches and profiles"
+
+OUTLOOK_CACHE_PATHS=(
+    "$HOME/Library/Caches/com.microsoft.Outlook"
+    "$HOME/Library/Containers/com.microsoft.Outlook"
+    "$HOME/Library/Group Containers/UBF8T346G9.Office/Outlook"
+)
+
+for path in "${OUTLOOK_CACHE_PATHS[@]}"; do
+    if [[ -e "$path" ]]; then
+        rm -rf "$path" 2>/dev/null && log_ok "Removed: $path" || log_warn "Could not remove: $path"
+    fi
+done
+
 # --- Remove tenant-scoped Keychain entries ---
 log_step "Removing $TENANT tenant-scoped Keychain entries"
 
@@ -267,6 +282,7 @@ log_step "Clearing Microsoft 365 preferences (defaults delete)"
 PLIST_DOMAINS=(
     "com.microsoft.teams2"
     "com.microsoft.Teams"
+    "com.microsoft.Outlook"
     "com.microsoft.OneDrive"
 )
 

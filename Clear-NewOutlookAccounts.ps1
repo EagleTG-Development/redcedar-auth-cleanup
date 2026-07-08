@@ -1,19 +1,19 @@
 <#
 .SYNOPSIS
-Clears local New Outlook for Windows account and app state for the current Windows user.
+Clears local Outlook account/app state for the current Windows user.
 
 .DESCRIPTION
-Stops New Outlook processes and removes local app data folders for the New Outlook
-for Windows package. This is intended for cases where New Outlook keeps showing
-stale accounts, tenant choices, mailbox selections, or sign-in state after the
-Microsoft 365 account or tenant has been corrected.
+Stops New Outlook and classic Outlook processes, removes local New Outlook app
+data, and backs up/removes classic Outlook mail profiles. This is intended for
+cases where Outlook keeps showing stale accounts, tenant choices, mailbox
+selections, or sign-in state after the Microsoft 365 account or tenant has been
+corrected.
 
-New Outlook does not use classic Outlook MAPI mail profiles. This script only
-changes local New Outlook app data for the current Windows profile. It does not
-delete mail from Microsoft 365, remove Entra users, change tenant configuration,
-clear classic Outlook profiles, remove work/school accounts, reboot Windows, or
-reset OneDrive/Office licensing state. It does not relaunch New Outlook after
-cleanup because users should return to classic Outlook.
+New Outlook does not use classic Outlook MAPI mail profiles, so this script
+clears both New Outlook app/account state and classic Outlook profile state. It
+does not delete mail from Microsoft 365, remove Entra users, change tenant
+configuration, remove work/school accounts, reboot Windows, or reset
+OneDrive/Office licensing state. It does not relaunch Outlook after cleanup.
 
 .EXAMPLE
 .\Clear-NewOutlookAccounts.ps1
@@ -138,10 +138,11 @@ function Invoke-NewOutlookAccountCleanup {
     function Stop-NewOutlookProcess {
         $processNames = @(
             'olk',
-            'OutlookForWindows'
+            'OutlookForWindows',
+            'OUTLOOK'
         )
 
-        Write-Step 'Stopping New Outlook processes'
+        Write-Step 'Stopping Outlook processes'
 
         foreach ($processName in $processNames) {
             $processes = @(Get-Process -Name $processName -ErrorAction SilentlyContinue)
@@ -235,6 +236,199 @@ function Invoke-NewOutlookAccountCleanup {
         }
     }
 
+    function Assert-SafeOutlookPath {
+        param([Parameter(Mandatory)][string]$Path)
+
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            throw 'Refusing to use an empty path.'
+        }
+
+        $outlookRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\Outlook'
+        if (Test-PathWithinRoot -Path $Path -Root $outlookRoot) {
+            return
+        }
+
+        $normalizedPath = Get-NormalizedPath -Path $Path
+        $normalizedRoot = Get-NormalizedPath -Path $outlookRoot
+        if ($normalizedPath.Equals($normalizedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return
+        }
+
+        throw "Refusing to use path outside the current user's Outlook local app data folder: $Path"
+    }
+
+    function Export-RegistryKey {
+        param(
+            [Parameter(Mandatory)][string]$RegistryPath,
+            [Parameter(Mandatory)][string]$OutputPath,
+            [Parameter(Mandatory)][string]$Description
+        )
+
+        if (-not (Test-Path -LiteralPath $RegistryPath)) {
+            Write-Host "Skip missing: $Description ($RegistryPath)" -ForegroundColor DarkGray
+            return
+        }
+
+        if ($PSCmdlet.ShouldProcess($RegistryPath, "Export $Description")) {
+            $regExePath = Join-Path $env:SystemRoot 'System32\reg.exe'
+            $regPath = $RegistryPath -replace '^HKCU:', 'HKCU'
+            $process = Start-Process -FilePath $regExePath `
+                -ArgumentList @('export', $regPath, $OutputPath, '/y') `
+                -NoNewWindow `
+                -PassThru `
+                -Wait
+
+            if ($process.ExitCode -ne 0) {
+                $cleanupState.RemovalWarnings++
+                throw "Could not export ${Description}: reg.exe exit code $($process.ExitCode)"
+            }
+        }
+    }
+
+    function Remove-RegistryTree {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$Description
+        )
+
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
+            return
+        }
+
+        if ($PSCmdlet.ShouldProcess($Path, "Remove $Description")) {
+            try {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            } catch {
+                $cleanupState.RemovalWarnings++
+                Write-Warning "Could not remove ${Path}: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    function Remove-RegistryValue {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$Name,
+            [Parameter(Mandatory)][string]$Description
+        )
+
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
+            return
+        }
+
+        $property = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+        if (-not $property) {
+            Write-Host "Skip missing: $Description ($Path\$Name)" -ForegroundColor DarkGray
+            return
+        }
+
+        if ($PSCmdlet.ShouldProcess("$Path\$Name", "Remove $Description")) {
+            try {
+                Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction Stop
+            } catch {
+                $cleanupState.RemovalWarnings++
+                Write-Warning "Could not remove ${Path}\${Name}: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    function Move-OutlookItemToBackup {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$BackupPath,
+            [Parameter(Mandatory)][string]$Description
+        )
+
+        Assert-SafeOutlookPath -Path $Path
+        Assert-SafeOutlookPath -Path $BackupPath
+
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-Host "Skip missing: $Description ($Path)" -ForegroundColor DarkGray
+            return
+        }
+
+        $destination = Join-Path $BackupPath (Split-Path -Path $Path -Leaf)
+        if ($PSCmdlet.ShouldProcess($Path, "Move $Description to $destination")) {
+            try {
+                Move-Item -LiteralPath $Path -Destination $destination -Force -ErrorAction Stop
+            } catch {
+                $cleanupState.RemovalWarnings++
+                Write-Warning "Could not move ${Path}: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    function Clear-ClassicOutlookProfileState {
+        Write-Step 'Creating classic Outlook backup folder'
+        $backupRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\Outlook\Backups'
+        Assert-SafeOutlookPath -Path $backupRoot
+
+        $backupPath = Join-Path $backupRoot (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
+        Assert-SafeOutlookPath -Path $backupPath
+
+        if ($PSCmdlet.ShouldProcess($backupPath, 'Create Outlook backup folder')) {
+            New-Item -Path $backupPath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        }
+
+        Write-Step 'Backing up classic Outlook profile registry keys'
+        $officeVersions = @('16.0', '15.0')
+        foreach ($officeVersion in $officeVersions) {
+            $profilesPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook\Profiles"
+            $outlookPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook"
+
+            Export-RegistryKey `
+                -RegistryPath $profilesPath `
+                -OutputPath (Join-Path $backupPath "Outlook-Profiles-$officeVersion.reg") `
+                -Description "Outlook profiles $officeVersion"
+
+            Export-RegistryKey `
+                -RegistryPath $outlookPath `
+                -OutputPath (Join-Path $backupPath "Outlook-Settings-$officeVersion.reg") `
+                -Description "Outlook settings $officeVersion"
+        }
+
+        Write-Step 'Moving classic Outlook OST/NST cache files to backup'
+        $outlookDataPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Outlook'
+        Assert-SafeOutlookPath -Path $outlookDataPath
+
+        if (Test-Path -LiteralPath $outlookDataPath) {
+            $cacheFiles = @(
+                Get-ChildItem -LiteralPath $outlookDataPath -Filter '*.ost' -File -Force -ErrorAction SilentlyContinue
+                Get-ChildItem -LiteralPath $outlookDataPath -Filter '*.nst' -File -Force -ErrorAction SilentlyContinue
+            )
+
+            foreach ($cacheFile in $cacheFiles) {
+                Move-OutlookItemToBackup `
+                    -Path $cacheFile.FullName `
+                    -BackupPath $backupPath `
+                    -Description 'classic Outlook cache file'
+            }
+
+            Move-OutlookItemToBackup `
+                -Path (Join-Path $outlookDataPath 'RoamCache') `
+                -BackupPath $backupPath `
+                -Description 'classic Outlook RoamCache'
+
+            $pstFiles = @(Get-ChildItem -LiteralPath $outlookDataPath -Filter '*.pst' -File -Force -ErrorAction SilentlyContinue)
+            foreach ($pstFile in $pstFiles) {
+                Write-Warning "Leaving PST file in place: $($pstFile.FullName)"
+            }
+        }
+
+        Write-Step 'Removing classic Outlook mail profiles'
+        foreach ($officeVersion in $officeVersions) {
+            $profilesPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook\Profiles"
+            $outlookPath = "HKCU:\Software\Microsoft\Office\$officeVersion\Outlook"
+
+            Remove-RegistryTree -Path $profilesPath -Description "Outlook profiles $officeVersion"
+            Remove-RegistryValue -Path $outlookPath -Name 'DefaultProfile' -Description "default profile $officeVersion"
+        }
+
+        Write-Host "Classic Outlook backup folder: $backupPath" -ForegroundColor Green
+    }
+
     Assert-SupportedEnvironment
     Start-CleanupTranscript
     try {
@@ -280,6 +474,12 @@ function Invoke-NewOutlookAccountCleanup {
         Remove-PathContents -Path $dataPath.Path -Description $dataPath.Description
     }
 
+    Remove-PathTree `
+        -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\olk') `
+        -Description 'New Outlook local profile/cache root'
+
+    Clear-ClassicOutlookProfileState
+
     $message = 'This also clears Microsoft identity caches and may sign out Outlook, Teams, Office, ' +
         'OneDrive, or other Microsoft apps.'
     Write-Warning $message
@@ -314,14 +514,14 @@ function Invoke-NewOutlookAccountCleanup {
 
     Write-Host ''
     if ($cleanupState.RemovalWarnings -gt 0) {
-        $message = "New Outlook cleanup finished with $($cleanupState.RemovalWarnings) removal warning(s). " +
+        $message = "Outlook cleanup finished with $($cleanupState.RemovalWarnings) removal warning(s). " +
             'Close New Outlook and rerun if stale account data remains.'
         Write-Warning $message
     } else {
-        Write-Host 'New Outlook account cleanup complete.' -ForegroundColor Green
+        Write-Host 'Outlook account cleanup complete.' -ForegroundColor Green
     }
 
-    Write-Host 'Open classic Outlook instead of New Outlook.' -ForegroundColor Green
+    Write-Host 'Open Outlook and sign into a fresh profile if prompted.' -ForegroundColor Green
     } finally {
         Stop-CleanupTranscript
     }

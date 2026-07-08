@@ -3,15 +3,15 @@
 Clears selected Microsoft 365 sign-in state and reboots Windows.
 
 .DESCRIPTION
-Stops Teams, OneDrive, and Office apps, removes tenant-scoped Windows Credential
-Manager entries for EagleTG, RedCedarTG, or both, clears common Teams caches,
-ensures Microsoft Company Portal is installed when winget is available, and
-forces a reboot.
+Stops Teams, OneDrive, Outlook, and Office apps, removes tenant-scoped Windows
+Credential Manager entries for EagleTG, RedCedarTG, or both, clears common Teams
+caches, clears both New Outlook app state and classic Outlook profiles, ensures
+Microsoft Company Portal is installed when winget is available, and forces a
+reboot.
 
 Use -ClearAllLogins to also remove broad Office, Teams, OneDrive, AAD, MSOID,
-ADAL, and Microsoft Online sign-in credentials; clear New Outlook app/account
-state; back up and remove classic Outlook profiles; clear Microsoft identity
-caches such as AAD Broker, OneAuth, TokenBroker, and IdentityCache; reset Office
+ADAL, and Microsoft Online sign-in credentials; clear Microsoft identity caches
+such as AAD Broker, OneAuth, TokenBroker, and IdentityCache; reset Office
 identity/licensing state; sign out Office WAM accounts; and back up/remove
 OneDrive work/school account state. That broader mode may sign the current
 Windows user out of other Microsoft 365 tenants, including Source-Tenant sessions.
@@ -33,10 +33,9 @@ have IT rejoin/repair the device.
 Tenant credential scope to clear. Valid values: RCTG, ETG, Both, ALL. Defaults to RCTG. ALL also enables broad Microsoft 365 login cleanup.
 
 .PARAMETER ClearAllLogins
-Also clears broad Microsoft 365 credentials, New Outlook app/account state,
-classic Outlook profiles, Office identity/licensing state, WAM Office accounts,
-OneDrive work/school account state, and Microsoft identity caches for the current
-Windows user. This can sign the user out of other tenants.
+Also clears broad Microsoft 365 credentials, Office identity/licensing state, WAM
+Office accounts, OneDrive work/school account state, and Microsoft identity
+caches for the current Windows user. This can sign the user out of other tenants.
 
 .EXAMPLE
 irm https://raw.githubusercontent.com/EagleTG-Development/redcedar-auth-cleanup/main/Clear-WorkAccountsAndReboot.ps1 | iex
@@ -747,6 +746,7 @@ function Clear-NewOutlookAccountState {
         Join-Path $newOutlookPackageRoot 'Settings'
         Join-Path $newOutlookPackageRoot 'TempState'
         Join-Path $newOutlookPackageRoot 'AC'
+        Join-Path $env:LOCALAPPDATA 'Microsoft\olk'
     )
 
     $paths | ForEach-Object { Remove-PathIfPresent -Path $_ }
@@ -994,8 +994,8 @@ function Show-DsRegStatusSummary {
 $transcriptPath = Start-CleanupTranscript
 Show-ExecutionContextSummary
 
-Write-Warning 'This will close Teams, OneDrive, and Office apps.'
-Write-Warning "It will clear $Tenant tenant-scoped Microsoft 365 sign-in hints and reboot this computer."
+Write-Warning 'This will close Teams, OneDrive, Outlook, and Office apps.'
+Write-Warning "It will clear $Tenant tenant-scoped Microsoft 365 sign-in hints, reset Outlook state, and reboot this computer."
 if ($Tenant -eq 'ALL') {
     $ClearAllLogins = $true
 }
@@ -1019,15 +1019,15 @@ Clear-TeamsCache
 Write-Step "Removing $Tenant tenant-scoped Windows Credential Manager entries"
 Remove-TenantCredential
 
+Write-Step 'Clearing New Outlook account and app state'
+Clear-NewOutlookAccountState
+
+Write-Step 'Clearing classic Outlook profiles and moving OST/NST caches to backup'
+Clear-ClassicOutlookProfileState
+
 if ($ClearAllLogins) {
     Write-Step 'Removing broad Office, Teams, OneDrive, and Microsoft 365 credentials'
     Remove-Microsoft365Credential
-
-    Write-Step 'Clearing New Outlook account and app state'
-    Clear-NewOutlookAccountState
-
-    Write-Step 'Clearing classic Outlook profiles and moving OST/NST caches to backup'
-    Clear-ClassicOutlookProfileState
 
     Write-Step 'Resetting Office identity, licensing, and activation state'
     Clear-OfficeRegistryState
